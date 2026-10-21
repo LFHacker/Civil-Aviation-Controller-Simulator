@@ -254,10 +254,19 @@ const OPT_SAVE := 0
 const OPT_LOAD := 1
 const OPT_PAUSE := 2
 const OPT_EXIT := 3
+## 100+ = 难度；200+ = 许可发布模式
+const OPT_DIFF := 100
+const OPT_MODE := 200
+const DIFF_NAMES := ["简易", "进阶", "高阶"]
+const DIFF_KEYS := ["easy", "normal", "hard"]
+const MODE_NAMES := ["预设一键", "填空式", "自由文本"]
+const MODE_KEYS := ["preset", "form", "text"]
 
 var _options_layer: Control
 var _options_panel: PanelContainer
 var _opt_pause_btn: Button
+var _opt_diff_buttons: Array = []
+var _opt_mode_buttons: Array = []
 
 
 func _build_options_menu() -> void:
@@ -301,6 +310,17 @@ func _build_options_menu() -> void:
 	col.add_child(_option_divider())
 	_opt_pause_btn = _option_button("暂停游戏", OPT_PAUSE)
 	col.add_child(_opt_pause_btn)
+	col.add_child(_option_divider())
+	col.add_child(_option_label("难度"))
+	for i in range(DIFF_NAMES.size()):
+		var b := _option_button("", OPT_DIFF + i)
+		col.add_child(b)
+		_opt_diff_buttons.append(b)
+	col.add_child(_option_label("许可发布模式"))
+	for i in range(MODE_NAMES.size()):
+		var b := _option_button("", OPT_MODE + i)
+		col.add_child(b)
+		_opt_mode_buttons.append(b)
 	col.add_child(_option_divider())
 	col.add_child(_option_button("返回主菜单    ESC", OPT_EXIT))
 
@@ -365,9 +385,90 @@ func _on_options_pressed() -> void:
 func _refresh_option_texts() -> void:
 	var paused := session != null and session.state.paused
 	_opt_pause_btn.text = "继续游戏" if paused else "暂停游戏"
+	var d := session.delivery if session != null else null
+	var diff := "normal"
+	var mode := "form"
+	if d != null:
+		diff = d.difficulty
+		mode = d.issue_mode
+	for i in range(_opt_diff_buttons.size()):
+		var mark := "● " if DIFF_KEYS[i] == diff else "○ "
+		_opt_diff_buttons[i].text = mark + DIFF_NAMES[i]
+	for i in range(_opt_mode_buttons.size()):
+		var mark2 := "● " if MODE_KEYS[i] == mode else "○ "
+		_opt_mode_buttons[i].text = mark2 + MODE_NAMES[i]
+
+
+## 选项面板里的小标题
+func _option_label(text: String) -> Label:
+	var lb := Label.new()
+	lb.text = text
+	lb.add_theme_font_override("font", AtcTheme.font(700))
+	lb.add_theme_font_size_override("font_size", AtcTheme.fs(11))
+	lb.add_theme_color_override("font_color", AtcTheme.C_TEXT_FAINT)
+	lb.custom_minimum_size = Vector2(0, 22.0 * AtcTheme.UI_SCALE)
+	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	return lb
+
+
+## 难度切换（规范 §0.3）：同时决定复诵/移交要不要逐项自己判
+func _set_difficulty(i: int) -> void:
+	if session == null or session.delivery == null:
+		return
+	if i < 0 or i >= DIFF_KEYS.size():
+		return
+	var d := session.delivery
+	d.difficulty = DIFF_KEYS[i]
+	d.readback_hard = DIFF_KEYS[i] == "hard"
+	d.handoff_hard = DIFF_KEYS[i] == "hard"
+	_save_game_settings()
+
+
+func _set_issue_mode(i: int) -> void:
+	if session == null or session.delivery == null:
+		return
+	if i < 0 or i >= MODE_KEYS.size():
+		return
+	session.delivery.issue_mode = MODE_KEYS[i]
+	_save_game_settings()
+
+
+## 难度/发布模式写进同一个设置文件，下一局沿用
+func _save_game_settings() -> void:
+	if session == null or session.delivery == null:
+		return
+	var cfg := ConfigFile.new()
+	cfg.load("user://settings.cfg")
+	cfg.set_value("game", "difficulty", session.delivery.difficulty)
+	cfg.set_value("game", "issue_mode", session.delivery.issue_mode)
+	cfg.save("user://settings.cfg")
+
+
+## 开局时把上次的设置套上
+func _load_game_settings() -> void:
+	if session == null or session.delivery == null:
+		return
+	var cfg := ConfigFile.new()
+	if cfg.load("user://settings.cfg") != OK:
+		return
+	var d := session.delivery
+	d.difficulty = str(cfg.get_value("game", "difficulty", d.difficulty))
+	d.issue_mode = str(cfg.get_value("game", "issue_mode", d.issue_mode))
+	d.readback_hard = d.difficulty == "hard"
+	d.handoff_hard = d.difficulty == "hard"
 
 
 func _on_option_selected(id: int) -> void:
+	if id >= OPT_MODE:
+		_set_issue_mode(id - OPT_MODE)
+		_options_layer.visible = false
+		_on_options_pressed()
+		return
+	if id >= OPT_DIFF:
+		_set_difficulty(id - OPT_DIFF)
+		_options_layer.visible = false
+		_on_options_pressed()
+		return
 	if id == OPT_SAVE:
 		_on_open_save()
 	elif id == OPT_LOAD:
@@ -448,6 +549,11 @@ func open(p_session: GameSession, store: SaveStore) -> void:
 	_store_ref = store
 	_root.visible = true
 	_setup_seat_panel()
+	_load_game_settings()
+	# 难度/发布模式是开局后才套上的，套完要让席位面板重画一次，
+	# 否则"预设一键"这类跟模式相关的控件不会出现
+	if _seat_panel != null and _seat_panel.has_method("refresh"):
+		_seat_panel.call("refresh")
 	refresh()
 	refresh_labels()
 

@@ -70,6 +70,11 @@ var handoff_confirmed := {}
 ## 从复诵确认到移交超时（规范 §7.2，影响评分不阻断）
 var handoff_late := false
 
+## 离场情报里玩家逐项通报过的条目（规范 §5.2）
+var dep_info_notified: Array = []
+## 发放行许可时还漏报了几条离场情报（进评分）
+var dep_info_skipped := 0
+
 ## ---- 飞行计划原值：放行前要与"当前有效值"逐项对照（放行机制规范 §1.2）----
 var plan_origin := ""      # 计划起飞机场
 var plan_route := ""       # 计划航路
@@ -168,6 +173,8 @@ func to_dict() -> Dictionary:
 		"missed_readback": missed_readback,
 		"handoff_confirmed": handoff_confirmed.duplicate(),
 		"handoff_late": handoff_late,
+		"dep_info_notified": dep_info_notified.duplicate(),
+		"dep_info_skipped": dep_info_skipped,
 		"atis_notified": atis_notified,
 	}
 
@@ -233,6 +240,9 @@ static func from_dict(d: Dictionary) -> Flight:
 	var hc: Variant = d.get("handoff_confirmed", {})
 	f.handoff_confirmed = hc if hc is Dictionary else {}
 	f.handoff_late = bool(d.get("handoff_late", false))
+	var dn: Variant = d.get("dep_info_notified", [])
+	f.dep_info_notified = dn if dn is Array else []
+	f.dep_info_skipped = int(d.get("dep_info_skipped", 0))
 	return f
 
 

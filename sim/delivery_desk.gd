@@ -128,6 +128,22 @@ var _tidy_at := -1.0
 ## 通播发布时选错值的次数（进评分）
 var atis_err_count := 0
 
+## ---- 许可发布模式（规范 §5.1）----
+## "preset" 预设一键 / "form" 填空式 / "text" 自由文本
+var issue_mode := "form"
+## ---- 离场情报通报（规范 §5.2）----
+var enable_dep_info := false
+## 离场情报的条目；QNH 是刚性项（不因 ATIS 省略），其余可因已抄收 ATIS 省略
+const DEP_ITEMS := [
+	{"key": "runway", "label": "使用跑道"},
+	{"key": "wind", "label": "风向风速"},
+	{"key": "vis", "label": "能见度"},
+	{"key": "qnh", "label": "修正海压", "required": true},
+	{"key": "taxi", "label": "地面滑行路线"},
+	{"key": "rvr", "label": "跑道视程"},
+	{"key": "windshear", "label": "低空风切变"},
+]
+
 ## 进行中的「协调修改」：key 为 "呼号|字段"，value 为 {"ready_at": 秒}
 var _coord := {}
 
@@ -469,10 +485,12 @@ func score_report() -> Dictionary:
 	var missed_rev := 0
 	var late_ho := 0
 	var clean_ho := 0
+	var dep_skip := 0
 	for f in flights:
 		var fl := f as Flight
 		missed_rb += fl.missed_readback
 		missed_rev += fl.missed_review
+		dep_skip += fl.dep_info_skipped
 		if fl.handoff_late:
 			late_ho += 1
 		elif fl.handed_off:
@@ -500,6 +518,9 @@ func score_report() -> Dictionary:
 		_add_line(lines, "通播要素与实况不符 %d 次" % atis_err_count,
 			-3 * atis_err_count)
 		total -= 3 * atis_err_count
+	if dep_skip > 0:
+		_add_line(lines, "离场情报漏报 %d 项" % dep_skip, -dep_skip)
+		total -= dep_skip
 
 	return {"total": total, "grade": _grade(total), "lines": lines}
 
@@ -990,6 +1011,156 @@ func confirm_qnh(callsign: String) -> Dictionary:
 	return {"ok": true, "error": ""}
 
 
+# ---------------------------------------------------------------- 三模式发布（规范 §5.1）
+
+## 预设一键模式：按飞行计划 + 当前运行要素直接生成一份完整许可。
+func preset_clearance(callsign: String) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	var squawk := f.squawk
+	if not is_valid_squawk(squawk):
+		squawk = _random_squawk()
+	return {
+		"ok": true, "error": "",
+		"sid": f.sid if SIDS.has(f.sid) else SIDS[0],
+		"alt_m": f.initial_alt_m,
+		"squawk": squawk,
+		"text": clearance_text(f),
+	}
+
+
+## 预设一键发送：校验交给 issue_clearance，这里只负责把要素取出来。
+func issue_preset(callsign: String, sim_time: float) -> Dictionary:
+	var p := preset_clearance(callsign)
+	if not bool(p.ok):
+		return p
+	return issue_clearance(callsign, String(p.sid), int(p.alt_m),
+		String(p.squawk), sim_time)
+
+
+## 自由文本模式：用关键词 + 数值把七项要素抠出来再校验（规范 §5.1 模式 C）。
+## 语音识别不在这一步；ASR 转成文本之后走的也是这条路径。
+func issue_free_text(callsign: String, text: String, sim_time: float) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	var t := text.strip_edges()
+	if t == "":
+		return {"ok": false, "error": "通话内容为空"}
+	if not t.contains(f.callsign):
+		return {"ok": false, "error": "缺少呼号 %s" % f.callsign}
+	var limit := f.clearance_limit if f.clearance_limit != "" else f.destination
+	if limit != "" and not t.contains(limit):
+		return {"ok": false, "error": "缺少放行界限 %s" % limit}
+	var sid := ""
+	for s in SIDS:
+		if t.contains(s):
+			sid = s
+			break
+	if sid == "":
+		return {"ok": false, "error": "没有识别到离场程序"}
+	var alt := 0
+	for a in ALT_OPTIONS:
+		if t.contains(str(a)):
+			alt = a
+			break
+	if alt == 0:
+		return {"ok": false, "error": "没有识别到初始高度"}
+	var sq := find_squawk_in_text(t, alt)
+	if sq == "":
+		return {"ok": false, "error": "没有识别到应答机编码"}
+	var qnh := int(field.get("qnh", 0))
+	if qnh > 0 and not t.contains(str(qnh)):
+		return {"ok": false, "error": "缺少修正海压 %d" % qnh}
+	return issue_clearance(callsign, sid, alt, sq, sim_time)
+
+
+## 从一段通话里找 4 位八进制应答机编码（排除高度之类已经用掉的数字）。
+static func find_squawk_in_text(text: String, alt_m: int) -> String:
+	var alt_txt := str(alt_m)
+	var i := 0
+	while i + 4 <= text.length():
+		var s := text.substr(i, 4)
+		var ok := true
+		for k in range(4):
+			var c := s[k]
+			if c < "0" or c > "7":
+				ok = false
+				break
+		if ok and s != alt_txt:
+			var before_ok := i == 0 or text[i - 1] < "0" or text[i - 1] > "9"
+			var after_ok := i + 4 >= text.length() \
+				or text[i + 4] < "0" or text[i + 4] > "9"
+			if before_ok and after_ok:
+				return s
+		i += 1
+	return ""
+
+
+# ---------------------------------------------------------------- 离场情报（规范 §5.2）
+
+## 当前应通报的离场情报条目；每条 {key,label,value,required,notified,covered}
+## covered = 机组已抄收现行 ATIS，这一条可以口头省略（QNH 除外）。
+func departure_info_items(f: Flight) -> Array:
+	var out: Array = []
+	var qnh := int(field.get("qnh", 0))
+	var values := {
+		"runway": str(field.get("runway", "")),
+		"wind": str(field.get("wind", "")),
+		"vis": str(field.get("visibility", "")),
+		"qnh": str(qnh) if qnh > 0 else "",
+		"taxi": "",
+		"rvr": "",
+		"windshear": "",
+	}
+	for it in DEP_ITEMS:
+		var d: Dictionary = it
+		var key := String(d.key)
+		var required := bool(d.get("required", false))
+		var covered := f.atis_ok and not required
+		out.append({
+			"key": key, "label": String(d.label), "value": String(values[key]),
+			"required": required, "covered": covered,
+			"notified": covered or f.dep_info_notified.has(key),
+		})
+	return out
+
+
+## 通报（勾选）一条离场情报
+func toggle_dep_info(callsign: String, key: String) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	if f.dep_info_notified.has(key):
+		f.dep_info_notified.erase(key)
+	else:
+		f.dep_info_notified.append(key)
+	return {"ok": true, "error": ""}
+
+
+## 一键全部通报
+func notify_all_dep_info(callsign: String) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	for it in departure_info_items(f):
+		f.dep_info_notified.append(String((it as Dictionary).key))
+	return {"ok": true, "error": ""}
+
+
+## 还有几条该通报没通报（机组没抄 ATIS 时才存在这个问题）
+func dep_info_missing(f: Flight) -> int:
+	var n := 0
+	for it in departure_info_items(f):
+		var d: Dictionary = it
+		if bool(d.get("required", false)):
+			continue
+		if not bool(d.get("notified", false)):
+			n += 1
+	return n
+
+
 ## 校验应答机：必须 4 位、每位 0-7（八进制）。
 static func is_valid_squawk(s: String) -> bool:
 	if s.length() != 4:
@@ -1064,6 +1235,8 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 	f.readback_diff = ""
 
 	_eval_slot(f, sim_time)
+	if enable_dep_info:
+		f.dep_info_skipped = dep_info_missing(f)
 	_log(sim_time, "atc", full_clearance_text(f))
 	return {"ok": true, "error": ""}
 

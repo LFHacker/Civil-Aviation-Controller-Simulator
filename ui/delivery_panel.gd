@@ -53,6 +53,12 @@ var _rb_timer: Label
 var _handoff_card: PanelContainer
 var _handoff_grid: GridContainer
 var _tidy_btn: Button
+var _preset_btn: Button
+var _text_row: HBoxContainer
+var _text_edit: LineEdit
+var _text_btn: Button
+var _dep_card: PanelContainer
+var _dep_grid: GridContainer
 var _accept_btn: Button
 var _reissue_btn: Button
 var _log_box: VBoxContainer
@@ -544,6 +550,27 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	action_row.add_child(_hint)
 
+	# 预设一键模式（规范 §5.1 模式 A）
+	_preset_btn = _action_button("一键发送预设许可", AtcTheme.C_ACCENT)
+	_preset_btn.pressed.connect(_on_issue_preset)
+	egrid.add_child(_preset_btn)
+
+	# 自由文本模式（规范 §5.1 模式 C）：语音识别出文本之后走的也是这条
+	_text_row = HBoxContainer.new()
+	_text_row.add_theme_constant_override("separation", 8)
+	_text_edit = LineEdit.new()
+	_text_edit.placeholder_text = "输入完整许可（呼号/界限/程序/高度/编码/修正海压）"
+	_text_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_text_edit.add_theme_font_override("font", AtcTheme.font(400))
+	_text_edit.add_theme_font_size_override("font_size", AtcTheme.fs(13))
+	_text_row.add_child(_text_edit)
+	_text_btn = _action_button("按文本发布", AtcTheme.C_ACCENT)
+	_text_btn.custom_minimum_size = Vector2(120.0 * AtcTheme.UI_SCALE,
+		30.0 * AtcTheme.UI_SCALE)
+	_text_btn.pressed.connect(_on_issue_text)
+	_text_row.add_child(_text_btn)
+	egrid.add_child(_text_row)
+
 	# 机组漏报通播时的提示卡（第一百五十九条：建立联络应当表明已收到通播）
 	_atis_card = PanelContainer.new()
 	var asb := StyleBoxFlat.new()
@@ -641,6 +668,41 @@ func _build_editor(parent: HBoxContainer) -> void:
 	var filler := Control.new()
 	filler.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	right.add_child(filler)
+
+	# 离场情报（规范 §5.2）：机组没抄 ATIS 时逐项通报
+	_dep_card = PanelContainer.new()
+	var dsb := StyleBoxFlat.new()
+	dsb.bg_color = Color(1, 1, 1, 0.03)
+	dsb.border_color = Color(1, 1, 1, 0.08)
+	dsb.set_border_width_all(1)
+	dsb.set_corner_radius_all(3)
+	dsb.content_margin_left = 14
+	dsb.content_margin_right = 14
+	dsb.content_margin_top = 10
+	dsb.content_margin_bottom = 10
+	_dep_card.add_theme_stylebox_override("panel", dsb)
+	_dep_card.visible = false
+	right.add_child(_dep_card)
+	var dcol := VBoxContainer.new()
+	dcol.add_theme_constant_override("separation", 5)
+	_dep_card.add_child(dcol)
+	var dhead := HBoxContainer.new()
+	dhead.add_theme_constant_override("separation", 8)
+	dcol.add_child(dhead)
+	dhead.add_child(_label("离场情报", 12, 700, AtcTheme.C_WARM))
+	var dsp := Control.new()
+	dsp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dhead.add_child(dsp)
+	var all_btn := _action_button("全部通报", AtcTheme.C_WARM)
+	all_btn.custom_minimum_size = Vector2(96.0 * AtcTheme.UI_SCALE,
+		26.0 * AtcTheme.UI_SCALE)
+	all_btn.pressed.connect(_on_notify_all_dep)
+	dhead.add_child(all_btn)
+	_dep_grid = GridContainer.new()
+	_dep_grid.columns = 2
+	_dep_grid.add_theme_constant_override("h_separation", 10)
+	_dep_grid.add_theme_constant_override("v_separation", 2)
+	dcol.add_child(_dep_grid)
 
 	# 通播卡（规范 §3）：状态、重大变化灯、更新与过期处置入口
 	var atis_card := PanelContainer.new()
@@ -1238,6 +1300,10 @@ func _refresh_detail() -> void:
 
 	_update_preview()
 	_refresh_handoff(f)
+	_refresh_dep_info(f)
+	# 三种发布模式（规范 §5.1）：只有当前模式对应的控件可见
+	_preset_btn.visible = desk.issue_mode == "preset" and can_issue
+	_text_row.visible = desk.issue_mode == "text" and can_issue
 
 
 func _select_item(opt: OptionButton, index: int) -> void:
@@ -1506,6 +1572,75 @@ func _on_confirm_qnh() -> void:
 		_hint.text = String(r.error)
 		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 		return
+	refresh()
+
+
+## 离场情报（规范 §5.2）：机组没抄 ATIS 时逐项勾选通报。
+## 抄了 ATIS 的项由系统自动算已覆盖（QNH 除外，它必须单独确认）。
+func _refresh_dep_info(f: Flight) -> void:
+	if _dep_card == null:
+		return
+	var show := desk.enable_dep_info and not f.atis_ok \
+		and f.state == Flight.State.PENDING
+	_dep_card.visible = show
+	if not show:
+		return
+	for c in _dep_grid.get_children():
+		c.queue_free()
+	for it in desk.departure_info_items(f):
+		var d: Dictionary = it
+		var key := String(d.key)
+		var cb := CheckBox.new()
+		var val := String(d.value)
+		cb.text = String(d.label) + ("" if val == "" else " " + val)
+		var covered := bool(d.covered)
+		var required := bool(d.required)
+		cb.button_pressed = bool(d.notified) or covered or required
+		cb.disabled = covered or required
+		cb.focus_mode = Control.FOCUS_NONE
+		cb.add_theme_font_override("font", AtcTheme.font(400))
+		cb.add_theme_font_size_override("font_size", AtcTheme.fs(12))
+		cb.add_theme_color_override("font_color",
+			AtcTheme.C_TEXT_FAINT if cb.disabled else AtcTheme.C_TEXT_SOFT)
+		if not cb.disabled:
+			cb.toggled.connect(func(_on: bool) -> void: _on_toggle_dep(key))
+		_dep_grid.add_child(cb)
+
+
+func _on_issue_preset() -> void:
+	if desk == null or _selected == "":
+		return
+	var r := desk.issue_preset(_selected, now)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	refresh()
+
+
+func _on_issue_text() -> void:
+	if desk == null or _selected == "":
+		return
+	var r := desk.issue_free_text(_selected, _text_edit.text, now)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	_text_edit.text = ""
+	refresh()
+
+
+func _on_notify_all_dep() -> void:
+	if desk == null or _selected == "":
+		return
+	desk.notify_all_dep_info(_selected)
+	refresh()
+
+
+func _on_toggle_dep(key: String) -> void:
+	if desk == null or _selected == "":
+		return
+	desk.toggle_dep_info(_selected, key)
 	refresh()
 
 
