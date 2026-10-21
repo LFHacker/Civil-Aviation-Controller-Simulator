@@ -1,0 +1,71 @@
+{
+	"id": "DEMO",
+	"icao": "ZDEM",
+	"name": "演示机场",
+	"name_en": "Demo International",
+	"elevation_ft": 120,
+	"magnetic_variation_deg": -4.2,
+	"clock_start": "0755",
+	"runways": [
+		{
+			"id": "18",
+			"heading_deg": 180,
+			"length_m": 3200,
+			"width_m": 60,
+			"surface": "asphalt",
+			"ils": true,
+			"threshold_lat": 0.0,
+			"threshold_lon": 0.0
+		},
+		{
+			"id": "36",
+			"heading_deg": 360,
+			"length_m": 3200,
+			"width_m": 60,
+			"surface": "asphalt",
+			"ils": false,
+			"threshold_lat": 0.0,
+			"threshold_lon": 0.0
+		}
+	],
+	"frequencies": {
+		"delivery": "121.950",
+		"apron": "121.800",
+		"ground": "121.750",
+		"tower": "118.100",
+		"approach": "119.000",
+		"center": "125.600"
+	},
+	"weather": {
+		"wind": "18005MPS",
+		"visibility": "CAVOK",
+		"qnh_hpa": 1013,
+		"temperature_c": 18
+	},
+	"atis": "INFO A",
+	"atis_alpha": "A",
+	"taxiways": [
+		{"id": "A", "name": "平行滑行道 A", "width_m": 45, "status": "开放", "remark": "南北向，全长可用"},
+		{"id": "C", "name": "机坪连接滑行道", "width_m": 45, "status": "开放", "remark": "机坪 ↔ A 的唯一通道"},
+		{"id": "B1", "name": "联络道 B1", "width_m": 45, "status": "开放", "remark": "北端，距 B2 450 m"},
+		{"id": "B2", "name": "联络道 B2", "width_m": 45, "status": "开放", "remark": "北中，快速脱离"},
+		{"id": "B3", "name": "联络道 B3", "width_m": 45, "status": "开放", "remark": "南中，快速脱离"},
+		{"id": "B4", "name": "联络道 B4", "width_m": 45, "status": "开放", "remark": "南端，落地后常用"},
+		{"id": "APN", "name": "机坪通廊", "width_m": 90, "status": "开放", "remark": "双指廊之间，含机位滑行线"},
+		{"id": "DEIC", "name": "除冰坪 D1–D3", "width_m": 0, "status": "开放", "remark": "南侧，独立进出"}
+	],
+	"schedule": [
+		{"std": "0800", "callsign": "CCA1501", "type": "B738", "dest": "ZBAA", "stand": "A05", "sid": "RUMUK 8D", "alt": 6000},
+		{"std": "0815", "callsign": "CES2302", "type": "A320", "dest": "ZSPD", "stand": "A12", "sid": "BETON 3A", "alt": 5000},
+		{"std": "0830", "callsign": "CSN7788", "type": "A321", "dest": "ZGGG", "stand": "A07", "sid": "SASAN 5B", "alt": 6000},
+		{"std": "0845", "callsign": "CHH1120", "type": "B789", "dest": "ZUUU", "stand": "A03", "sid": "KAMAN 2C", "alt": 4000},
+		{"std": "0900", "callsign": "CQH8890", "type": "B738", "dest": "ZSSS", "stand": "A15", "sid": "RUMUK 8D", "alt": 5000},
+		{"std": "0915", "callsign": "CCA1866", "type": "A321", "dest": "ZBAA", "stand": "A09", "sid": "BETON 3A", "alt": 6000},
+		{"std": "0930", "callsign": "CES4411", "type": "B738", "dest": "ZSPD", "stand": "A20", "sid": "SASAN 5B", "alt": 4000},
+		{"std": "0945", "callsign": "CSN6203", "type": "A320", "dest": "ZGGG", "stand": "A13", "sid": "KAMAN 2C", "alt": 5000},
+		{"std": "1000", "callsign": "CHH0955", "type": "B789", "dest": "ZUUU", "stand": "A01", "sid": "RUMUK 8D", "alt": 6000},
+		{"std": "1015", "callsign": "CQH7712", "type": "A320", "dest": "ZSSS", "stand": "A17", "sid": "BETON 3A", "alt": 4000},
+		{"std": "1030", "callsign": "CCA2098", "type": "B738", "dest": "ZBAA", "stand": "A22", "sid": "SASAN 5B", "alt": 5000},
+		{"std": "1045", "callsign": "CES3305", "type": "A321", "dest": "ZSPD", "stand": "A11", "sid": "KAMAN 2C", "alt": 6000}
+	]
+}

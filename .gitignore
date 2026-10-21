@@ -1,0 +1,14 @@
+# Godot 4
+.godot/
+.import/
+export/
+export_presets.cfg
+*.translation
+
+# 本地产物
+screenshots/
+build/
+*.log
+
+# Blender 备份文件
+*.blend1
