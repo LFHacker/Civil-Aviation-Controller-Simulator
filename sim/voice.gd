@@ -25,7 +25,7 @@ const AIRLINE_PREFIX := "ap_"
 ## 固定短语表：id → 文本。生成音频时按这张表逐条合成。
 const FIXED_PHRASES := {
 	"p_clearance_to": "许可放行至",
-	"p_via": "经",
+	"p_by": "按",
 	"p_departure": "离场",
 	"p_initial_alt": "初始高度",
 	"p_meter": "米",
@@ -48,7 +48,37 @@ const FIXED_PHRASES := {
 	"p_incomplete": "许可不完整，请重复",
 }
 
+## 进离场程序的中文读法：中文管制通话里读「字母 + 序号」，
+## 不读航路号（航路在飞行计划里，放行通话不念），所以这里每个程序一整段。
+const SID_TEXT := {
+	"RUMUK8D": "RUMUK 八号",
+	"BETON3A": "BETON 三号",
+	"SASAN5B": "SASAN 五号",
+	"KAMAN2C": "KAMAN 二号",
+}
+
+## 目的地机场读法（demo 机场的常用目的地）
+const DEST_TEXT := {
+	"ZSPD": "浦东",
+	"ZBAA": "首都",
+	"ZBTJ": "滨海",
+	"ZBSJ": "正定",
+	"ZSNJ": "禄口",
+	"ZUUU": "双流",
+	"ZSSS": "虹桥",
+	"ZGGG": "白云",
+}
+
 const AIRLINES := ["CCA", "CES", "CSN", "CHH", "CQH"]
+
+## 公司呼号的中文读法（生成音频片段时用；中国管制通话里读中文名，不读字母）
+const AIRLINE_TEXT := {
+	"CCA": "国航",
+	"CES": "东方",
+	"CSN": "南方",
+	"CHH": "海南",
+	"CQH": "春秋",
+}
 
 
 ## 一个数字串 → 数字片段序列（1200 → [d1,d2,d0,d0]）
@@ -79,15 +109,16 @@ static func callsign(code: String) -> Array:
 
 
 ## 一条许可（放行 -> 机组）的播报片段
-static func clearance(callsign_code: String, limit: String, sid: String,
-		route: String, alt_m: int, squawk: String, qnh: int) -> Array:
+## 注意：中国管制放行通话**不念航路号**，只念进离场程序，航路在飞行计划里。
+static func clearance(callsign_code: String, sid_id: String, dest_id: String,
+		alt_m: int, squawk: String, qnh: int) -> Array:
 	var out: Array = []
 	out.append_array(callsign(callsign_code))
 	out.append(PHRASE_PREFIX + "clearance_to")
-	out.append_array(_spell(limit))
+	out.append_array(dest(dest_id))
+	out.append(PHRASE_PREFIX + "by")
+	out.append_array(sid(sid_id))
 	out.append(PHRASE_PREFIX + "departure")
-	out.append(PHRASE_PREFIX + "via")
-	out.append_array(_spell(route))
 	out.append(PHRASE_PREFIX + "initial_alt")
 	out.append_array(digits(str(alt_m)))
 	out.append(PHRASE_PREFIX + "meter")
@@ -99,13 +130,14 @@ static func clearance(callsign_code: String, limit: String, sid: String,
 
 
 ## 复诵（机组 -> 放行）：安全关键项 + 完整呼号
-static func readback(callsign_code: String, limit: String, sid: String,
+static func readback(callsign_code: String, sid_id: String, dest_id: String,
 		alt_m: int, squawk: String, qnh: int) -> Array:
 	var out: Array = []
 	out.append(PHRASE_PREFIX + "clearance_to")
-	out.append_array(_spell(limit))
+	out.append_array(dest(dest_id))
+	out.append(PHRASE_PREFIX + "by")
+	out.append_array(sid(sid_id))
 	out.append(PHRASE_PREFIX + "departure")
-	out.append_array(_spell(sid))
 	out.append(PHRASE_PREFIX + "initial_alt")
 	out.append_array(digits(str(alt_m)))
 	out.append(PHRASE_PREFIX + "meter")
@@ -118,18 +150,18 @@ static func readback(callsign_code: String, limit: String, sid: String,
 
 
 ## 首次呼叫（机组 -> 放行）
-static func request(callsign_code: String, stand: String, dest: String,
+static func request(callsign_code: String, stand: String, dest_id: String,
 		atis_ok: bool) -> Array:
 	var out: Array = []
 	out.append_array(callsign(callsign_code))
 	out.append(PHRASE_PREFIX + "stand")
-	out.append_array(_spell(stand))
+	out.append_array(digits(stand))
 	if atis_ok:
 		out.append(PHRASE_PREFIX + "atis_received")
 	else:
 		out.append(PHRASE_PREFIX + "not_received")
 	out.append(PHRASE_PREFIX + "request")
-	out.append_array(_spell(dest))
+	out.append_array(dest(dest_id))
 	return out
 
 
@@ -143,12 +175,25 @@ static func handoff(callsign_code: String, ground_freq: String) -> Array:
 	return out
 
 
-## 把用户文字里认不出来的部分跳过：字母逐个用数字片段读不出来，
-## 所以这里只保留"能读出来的片段"，宁可少念也不乱念。
-static func _spell(text: String) -> Array:
-	return digits(text)
+## 进离场程序：有中文读法就用专门片段，没有就退回逐位读（宁可少念不乱念）
+static func sid(sid_id: String) -> Array:
+	if sid_id == "":
+		return []
+	if SID_TEXT.has(sid_id):
+		return ["sid_" + sid_id]
+	return digits(sid_id)
+
+
+## 目的地：同上
+static func dest(dest_id: String) -> Array:
+	if dest_id == "":
+		return []
+	if DEST_TEXT.has(dest_id):
+		return ["dest_" + dest_id]
+	return digits(dest_id)
 
 
 ## 片段总数（生成音频前用来核对清单）
 static func piece_count() -> int:
-	return DIGITS.size() + FIXED_PHRASES.size() + AIRLINES.size()
+	return DIGITS.size() + FIXED_PHRASES.size() + AIRLINES.size() \
+		+ SID_TEXT.size() + DEST_TEXT.size()

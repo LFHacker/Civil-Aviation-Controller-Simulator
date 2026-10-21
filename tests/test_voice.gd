@@ -56,10 +56,12 @@ func _test_callsign() -> void:
 
 func _test_clearance() -> void:
 	_section("放行许可播报")
-	var s := Voice.clearance("CCA1501", "18", "RUMUK8D", "W105", 6000, "4215", 1013)
+	var s := Voice.clearance("CCA1501", "RUMUK8D", "ZSPD", 6000, "4215", 1013)
 	_check(s.size() > 15, "片段数量足够表达一条完整许可", str(s.size()))
 	_check(s[0] == "ap_CCA", "开头是呼号（机组先听到叫自己）", str(s.slice(0, 3)))
 	_check(s.has("p_clearance_to"), "含『许可放行至』")
+	_check(s.has("dest_ZSPD"), "天气/目的地用整段读法", str(s))
+	_check(s.has("sid_RUMUK8D"), "进离场程序用整段读法（不逐字母丢字）", str(s))
 	_check(s.has("p_initial_alt"), "含『初始高度』")
 	_check(s.has("p_meter"), "高度后面跟『米』")
 	_check(s.has("p_squawk"), "含『应答机』")
@@ -68,13 +70,19 @@ func _test_clearance() -> void:
 	var i := s.find("p_initial_alt")
 	_check(String(s[i + 5]) == "p_meter", "高度四位数字后紧跟『米』", str(s.slice(i, i + 6)))
 	_check(s.count("p_clearance_to") == 1, "『许可放行至』只出现一次")
+	# 中国管制放行不念航路号
+	_check(not s.has("p_via"), "放行通话不念航路号")
+	# 未知程序/机场不能把整句变成空白
+	var s2 := Voice.clearance("CCA1501", "XYZ9", "", 3000, "1000", 1000)
+	_check(s2.has("p_clearance_to") and s2.has("p_initial_alt"),
+		"未登记的程序/机场不会打断整句", str(s2))
+	_check(not s2.has("dest_"), "空机场不产生空的 dest 片段")
 
 
 func _test_readback() -> void:
 	_section("复诵播报")
-	var r := Voice.readback("CES5175", "18", "SASAN5B", 6900, "4215", 1013)
+	var r := Voice.readback("CES5175", "SASAN5B", "ZSPD", 6900, "4215", 1013)
 	_check(r[0] == "p_clearance_to", "复诵不以呼号开头（机组接话）", str(r[0]))
-	_check(r[r.size() - 1] == "d1" or r.has("ap_CES"), "结尾带呼号", str(r.slice(r.size() - 6)))
 	var tail := r.slice(r.size() - 6)
 	_check(tail.has("ap_CES"), "复诵末段是完整呼号", str(tail))
 	# 复诵必须包含安全关键三项：高度、应答机、修正海压
@@ -87,6 +95,7 @@ func _test_other_lines() -> void:
 	var q := Voice.request("CCA1501", "215", "ZSPD", true)
 	_check(q[0] == "ap_CCA", "首次呼叫先报呼号")
 	_check(q.has("p_atis_received"), "已抄收通播时明说")
+	_check(q.has("dest_ZSPD"), "首次呼叫报目的地")
 	var q2 := Voice.request("CCA1501", "215", "ZSPD", false)
 	_check(q2.has("p_not_received") and not q2.has("p_atis_received"),
 		"未抄收时播另一句")
@@ -102,8 +111,8 @@ func _test_manifest() -> void:
 	_section("片段清单一致性")
 	# 模板里出现的每个 id，都必须能在短语表或数字/公司表里找到
 	var used: Array = []
-	used.append_array(Voice.clearance("CCA1501", "18", "RUMUK8D", "W105", 6000, "4215", 1013))
-	used.append_array(Voice.readback("CES5175", "18", "SASAN5B", 6900, "4215", 1013))
+	used.append_array(Voice.clearance("CCA1501", "RUMUK8D", "ZSPD", 6000, "4215", 1013))
+	used.append_array(Voice.readback("CES5175", "SASAN5B", "ZSPD", 6900, "4215", 1013))
 	used.append_array(Voice.request("CSN3001", "215", "ZSPD", true))
 	used.append_array(Voice.handoff("CHH7801", "121.7"))
 	var unknown: Array = []
@@ -115,6 +124,12 @@ func _test_manifest() -> void:
 		elif s.begins_with(Voice.AIRLINE_PREFIX):
 			if not Voice.AIRLINES.has(s.substr(Voice.AIRLINE_PREFIX.length())):
 				unknown.append(s)
+		elif s.begins_with("sid_"):
+			if not Voice.SID_TEXT.has(s.substr(4)):
+				unknown.append(s)
+		elif s.begins_with("dest_"):
+			if not Voice.DEST_TEXT.has(s.substr(5)):
+				unknown.append(s)
 		elif s.begins_with(Voice.DIGIT_PREFIX):
 			var d := s.substr(Voice.DIGIT_PREFIX.length())
 			if not (d.is_valid_int() and int(d) >= 0 and int(d) <= 9):
@@ -122,10 +137,17 @@ func _test_manifest() -> void:
 		else:
 			unknown.append(s)
 	_check(unknown.is_empty(), "所有播放片段都有对应音频条目", str(unknown))
-	_check(Voice.piece_count() == 10 + Voice.FIXED_PHRASES.size() + Voice.AIRLINES.size(),
-		"片段总数 = 数字 + 短语 + 公司", str(Voice.piece_count()))
-	_check(Voice.piece_count() < 60, "片段库足够小，可以一次性生成随包分发",
+	_check(Voice.piece_count() == 10 + Voice.FIXED_PHRASES.size() + Voice.AIRLINES.size()
+		+ Voice.SID_TEXT.size() + Voice.DEST_TEXT.size(),
+		"片段总数 = 数字 + 短语 + 公司 + 程序 + 机场", str(Voice.piece_count()))
+	_check(Voice.piece_count() < 90, "片段库足够小，可以一次性生成随包分发",
 		str(Voice.piece_count()))
+	var named := 0
+	for a in Voice.AIRLINES:
+		if Voice.AIRLINE_TEXT.has(a) and String(Voice.AIRLINE_TEXT[a]) != "":
+			named += 1
+	_check(named == Voice.AIRLINES.size(), "每个公司都有中文读法", str(named))
+	_check(String(Voice.AIRLINE_TEXT.get("CES", "")) == "东方", "CES 读作『东方』")
 
 
 func _section(title: String) -> void:
