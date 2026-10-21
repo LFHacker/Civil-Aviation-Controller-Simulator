@@ -57,6 +57,15 @@ var readback_ok := true
 var readback_diff := ""   # 不一致时的人话描述
 var readback_at := 0.0    # 预计复诵到达的仿真时刻
 
+## 复诵逐项比对（规范 §6.1）：每项 {key,label,expected,actual,critical,same}
+var readback_items: Array = []
+## 高阶模式下玩家对每一项的判定：key → true(一致) / false(不一致)
+var readback_marks := {}
+## 高阶模式的核对时限（仿真秒）；-1 表示没有时限
+var readback_deadline := -1.0
+## 高阶模式里把不一致项误判为一致的次数（进评分）
+var missed_readback := 0
+
 ## ---- 飞行计划原值：放行前要与"当前有效值"逐项对照（放行机制规范 §1.2）----
 var plan_origin := ""      # 计划起飞机场
 var plan_route := ""       # 计划航路
@@ -149,6 +158,10 @@ func to_dict() -> Dictionary:
 		"slot_delay_min": slot_delay_min,
 		"qnh_confirmed": qnh_confirmed,
 		"atis_reported": atis_reported,
+		"readback_items": readback_items.duplicate(true),
+		"readback_marks": readback_marks.duplicate(),
+		"readback_deadline": readback_deadline,
+		"missed_readback": missed_readback,
 		"atis_notified": atis_notified,
 	}
 
@@ -205,6 +218,12 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.qnh_confirmed = bool(d.get("qnh_confirmed", false))
 	f.atis_reported = str(d.get("atis_reported", ""))
 	f.atis_notified = bool(d.get("atis_notified", false))
+	var ri: Variant = d.get("readback_items", [])
+	f.readback_items = ri if ri is Array else []
+	var rm: Variant = d.get("readback_marks", {})
+	f.readback_marks = rm if rm is Dictionary else {}
+	f.readback_deadline = float(d.get("readback_deadline", -1.0))
+	f.missed_readback = int(d.get("missed_readback", 0))
 	return f
 
 

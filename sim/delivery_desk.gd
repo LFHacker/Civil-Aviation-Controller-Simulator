@@ -102,11 +102,18 @@ var enable_value_check := false
 ## 当前播发；代号是版本指针，过期本身就是必须拦截的错误状态
 var atis := AtisBroadcast.new()
 ## 是否启用生命周期（过期要处置）。默认关闭，让老测试照旧。
-var enable_atis_lifecycle := false
-## 由 tick 维护：当前通播是否已过期
+var enable_atis_lifecycle := false## 由 tick 维护：当前通播是否已过期
 var atis_expired := false
 ## 由 tick 维护：实况与通播相比是否触发了"重大变化"
 var atis_major := ""
+
+## ---- 复诵核对（规范 §6）----
+## true = 高阶模式：系统不高亮不一致项，玩家逐项自己判，还有 60 秒时限
+var readback_hard := false
+## 高阶模式的核对时限（仿真秒）
+const READBACK_LIMIT := 60.0
+## 高阶模式超时退回的次数（进评分）
+var readback_timeouts := 0
 
 ## 进行中的「协调修改」：key 为 "呼号|字段"，value 为 {"ready_at": 秒}
 var _coord := {}
@@ -974,6 +981,7 @@ func tick(sim_time: float) -> void:
 	check_delay_notices(sim_time)
 	_tick_coordination(sim_time)
 	_tick_atis(sim_time)
+	_tick_readback_deadline(sim_time)
 	for f in flights:
 		if f.state != Flight.State.SENT:
 			continue
@@ -998,6 +1006,31 @@ func _tick_atis(sim_time: float) -> void:
 	if reason != "" and atis_major == "":
 		atis_major = reason
 		_log(sim_time, "system", "实况出现重大变化（%s），应立即更新通播。" % reason)
+
+
+## 高阶模式复诵核对超时：退回「计划已审查」，需要重新发布许可（规范 §6.2）。
+## 规范原文说退回"许可已发布"，但那个状态下没法重新发布，
+## 所以这里退到可以重发的状态，语义上仍然是"这架没放成、要重来"。
+func _tick_readback_deadline(sim_time: float) -> void:
+	if not readback_hard:
+		return
+	for f in flights:
+		var fl := f as Flight
+		if fl.state != Flight.State.READBACK:
+			continue
+		if fl.readback_deadline < 0.0 or sim_time < fl.readback_deadline:
+			continue
+		fl.state = Flight.State.PENDING
+		fl.readback_deadline = -1.0
+		fl.readback_text = ""
+		fl.readback_items = []
+		fl.readback_marks = {}
+		fl.readback_at = 0.0
+		fl.t_sent = -1.0
+		fl.t_readback = -1.0
+		readback_timeouts += 1
+		_log(sim_time, "system",
+			"%s 复诵核对超时，退回「计划已审查」，需重新发布许可。" % fl.callsign)
 
 
 func _tick_coordination(sim_time: float) -> void:
@@ -1038,46 +1071,102 @@ func _generate_readback(f: Flight, sim_time: float) -> void:
 		wrong = rng.randf() < ERROR_RATE
 
 	var limit := f.clearance_limit if f.clearance_limit != "" else f.destination
-	var text := DeliveryDesk.readback_text_of(f.callsign, limit, f.sid, f.route,
-		f.initial_alt_m, f.squawk)
+	# 机组报出来的值（可能读错）；文本与逐项表用同一份，避免"念一套、比一套"
+	var sid := f.sid
+	var route := f.route
+	var alt := f.initial_alt_m
+	var squawk := f.squawk
 	var diff := ""
-	var ok := true
 
 	if wrong:
 		var kind := rng.randi_range(0, ERR_KINDS - 1)
 		if kind == 0:
-			var bad := _corrupt_digit(f.squawk)
-			text = DeliveryDesk.readback_text_of(f.callsign, limit, f.sid, f.route,
-				f.initial_alt_m, bad)
-			diff = "应答机读成 %s，应为 %s" % [bad, f.squawk]
+			squawk = _corrupt_digit(f.squawk)
+			diff = "应答机读成 %s，应为 %s" % [squawk, f.squawk]
 		elif kind == 1:
-			var bad_alt := f.initial_alt_m + 1000
-			text = DeliveryDesk.readback_text_of(f.callsign, limit, f.sid, f.route,
-				bad_alt, f.squawk)
-			diff = "初始高度读成 %d 米，应为 %d 米" % [bad_alt, f.initial_alt_m]
+			alt = f.initial_alt_m + 1000
+			diff = "初始高度读成 %d 米，应为 %d 米" % [alt, f.initial_alt_m]
 		elif kind == 2:
 			var bad_sid := SIDS[0]
 			for s in SIDS:
 				if s != f.sid:
 					bad_sid = s
 					break
-			text = DeliveryDesk.readback_text_of(f.callsign, limit, bad_sid,
-				SID_ROUTES.get(bad_sid, ""), f.initial_alt_m, f.squawk)
+			sid = bad_sid
+			route = str(SID_ROUTES.get(bad_sid, ""))
 			diff = "离场程序读成 %s，应为 %s" % [bad_sid, f.sid]
 		else:
-			# 航路读错：真实里最常见的错误之一，前面只校验 SID 是抓不到的
-			var bad_route := "A461 RUMUK" if f.route != "A461 RUMUK" else "W105 LADIX"
-			text = DeliveryDesk.readback_text_of(f.callsign, limit, f.sid,
-				bad_route, f.initial_alt_m, f.squawk)
-			diff = "航路读成 %s，应为 %s" % [bad_route, f.route]
-		ok = false
+			# 航路读错：真实里最常见的错误之一，只校验 SID 是抓不到的
+			route = "A461 RUMUK" if f.route != "A461 RUMUK" else "W105 LADIX"
+			diff = "航路读成 %s，应为 %s" % [route, f.route]
 
+	var text := DeliveryDesk.readback_text_of(f.callsign, limit, sid, route, alt, squawk)
 	f.readback_text = text
-	f.readback_ok = ok
+	f.readback_items = _readback_items(f, sid, route, alt, squawk)
+	f.readback_ok = not _has_critical_mismatch(f.readback_items)
 	f.readback_diff = diff
+	f.readback_marks = {}
 	f.state = Flight.State.READBACK
 	f.t_readback = sim_time
+	f.readback_deadline = sim_time + READBACK_LIMIT if readback_hard else -1.0
 	_log(sim_time, "pilot", text)
+
+
+## 逐项比对表（规范 §6.1）。关键项不一致必须拦，非关键项只记录。
+func _readback_items(f: Flight, sid: String, route: String, alt: int,
+		squawk: String) -> Array:
+	var qnh := int(field.get("qnh", 0))
+	var rwy := str(field.get("runway", ""))
+	var wind := str(field.get("wind", ""))
+	var vis := str(field.get("visibility", ""))
+	return [
+		_item("runway", "使用跑道", rwy, rwy, true),
+		_item("sid", "离场程序", f.sid, sid, true),
+		_item("route", "航路", f.route, route, true),
+		_item("alt", "初始高度", "%d 米" % f.initial_alt_m, "%d 米" % alt, true),
+		_item("squawk", "应答机", f.squawk, squawk, true),
+		_item("qnh", "修正海压", "%d" % qnh, "%d" % qnh, true),
+		_item("freq", "离场频率", f.dep_freq, f.dep_freq, true),
+		_item("wind", "地面风", wind, wind, false),
+		_item("vis", "能见度", vis, vis, false),
+	]
+
+
+static func _item(key: String, label: String, expected: String, actual: String,
+		critical: bool) -> Dictionary:
+	return {
+		"key": key, "label": label, "expected": expected, "actual": actual,
+		"critical": critical, "same": expected == actual,
+	}
+
+
+func _has_critical_mismatch(items: Array) -> bool:
+	for it in items:
+		var d: Dictionary = it
+		if bool(d.get("critical", false)) and not bool(d.get("same", true)):
+			return true
+	return false
+
+
+## 高阶模式：玩家逐项标记"一致/不一致"（规范 §6.2）。
+func mark_readback_item(callsign: String, key: String, same: bool,
+		sim_time: float) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	if f.state != Flight.State.READBACK:
+		return {"ok": false, "error": "%s 当前没有待复核的复诵" % callsign}
+	if not readback_hard:
+		return {"ok": false, "error": "简易模式不需要逐项标记"}
+	f.readback_marks[key] = same
+	return {"ok": true, "error": ""}
+
+
+## 还有几项没核对（高阶模式界面上用来决定按钮是否可用）
+func readback_unmarked(f: Flight) -> int:
+	if f == null:
+		return 0
+	return maxi(0, f.readback_items.size() - f.readback_marks.size())
 
 
 func _corrupt_digit(squawk: String) -> String:
@@ -1090,19 +1179,51 @@ func _corrupt_digit(squawk: String) -> String:
 
 
 ## 复核通过：复诵一致才允许放行。
+## 简易模式：系统已经高亮出不一致项，直接按结果判。
+## 高阶模式：玩家必须逐项标记；把不一致的标成一致**不拦截，但记进评分**
+## （规范 §6.2 的原话："系统不拦截，但该错误会在后续飞行阶段触发告警"）。
 func accept_readback(callsign: String, sim_time: float) -> Dictionary:
 	var f := get_flight(callsign)
 	if f == null:
 		return {"ok": false, "error": "找不到航班 %s" % callsign, "correct": false}
 	if f.state != Flight.State.READBACK:
 		return {"ok": false, "error": "%s 当前没有待复核的复诵" % callsign, "correct": false}
-	if not f.readback_ok:
-		misjudge_count += 1
-		return {"ok": false, "correct": false,
-			"error": "复诵与许可不一致（%s），不能作为放行依据，请重发。" % f.readback_diff}
+
+	if readback_hard:
+		var unmarked := readback_unmarked(f)
+		if unmarked > 0:
+			return {"ok": false, "correct": false,
+				"error": "还有 %d 项没有核对，请逐项判定后再确认" % unmarked}
+		# 玩家标了"不一致"的关键项：说明复诵有问题，应当重发
+		for it in f.readback_items:
+			var d: Dictionary = it
+			if not bool(d.get("critical", false)):
+				continue
+			if f.readback_marks.has(d.key) and not bool(f.readback_marks[d.key]):
+				return {"ok": false, "correct": false,
+					"error": "你把「%s」判为不一致，请重发完整许可" % String(d.label)}
+		# 实际不一致却被标成一致：放过去，但记账
+		var missed := 0
+		for it in f.readback_items:
+			var d2: Dictionary = it
+			if not bool(d2.get("critical", false)) or bool(d2.get("same", true)):
+				continue
+			if bool(f.readback_marks.get(d2.key, false)):
+				missed += 1
+		if missed > 0:
+			f.missed_readback += missed
+			_log(sim_time, "system",
+				"%s 复诵中有 %d 项与许可不一致未被发现。" % [f.callsign, missed])
+	else:
+		if _has_critical_mismatch(f.readback_items):
+			misjudge_count += 1
+			return {"ok": false, "correct": false,
+				"error": "复诵与许可不一致（%s），不能作为放行依据，请重发。"
+					% f.readback_diff}
 
 	f.state = Flight.State.CLEARED
 	f.t_cleared = sim_time
+	f.readback_deadline = -1.0
 	cleared_count += 1
 	_log(sim_time, "atc", "%s，复诵正确，放行完成，联系地面。" % f.callsign)
 	return {"ok": true, "error": "", "correct": true}
@@ -1123,6 +1244,9 @@ func reissue(callsign: String, sim_time: float) -> Dictionary:
 	f.readback_text = ""
 	f.readback_ok = true
 	f.readback_diff = ""
+	f.readback_items = []
+	f.readback_marks = {}
+	f.readback_deadline = -1.0
 	f.readback_at = 0.0
 	f.t_sent = -1.0
 	f.t_readback = -1.0

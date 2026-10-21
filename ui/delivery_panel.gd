@@ -48,6 +48,8 @@ var _hint: Label
 var _readback_card: PanelContainer
 var _readback_text: Label
 var _readback_diff: Label
+var _rb_grid: GridContainer
+var _rb_timer: Label
 var _accept_btn: Button
 var _reissue_btn: Button
 var _log_box: VBoxContainer
@@ -579,6 +581,15 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_readback_text = _label("", 14, 400, AtcTheme.C_TEXT)
 	_readback_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rcol.add_child(_readback_text)
+
+	# 逐项比对表（规范 §6.1）：字段 / 许可 / 复诵 / 判定
+	_rb_timer = _label("", 11, 700, AtcTheme.C_WARM)
+	rcol.add_child(_rb_timer)
+	_rb_grid = GridContainer.new()
+	_rb_grid.columns = 4
+	_rb_grid.add_theme_constant_override("h_separation", 12)
+	_rb_grid.add_theme_constant_override("v_separation", 4)
+	rcol.add_child(_rb_grid)
 	_readback_diff = _label("", 13, 700, AtcTheme.C_DANGER)
 	_readback_diff.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rcol.add_child(_readback_diff)
@@ -854,6 +865,11 @@ func tick(sim_time: float) -> void:
 		_tabs.tick(sim_time)
 	if _signature() != before:
 		refresh()
+	# 复诵核对倒计时不需要整面板重建，单独刷这一行
+	if _readback_card != null and _readback_card.visible and _selected != "":
+		var f := desk.get_flight(_selected)
+		if f != null and f.state == Flight.State.READBACK:
+			_refresh_rb_timer(f)
 
 
 func _signature() -> String:
@@ -1166,7 +1182,12 @@ func _refresh_detail() -> void:
 	_readback_card.visible = show_rb
 	if show_rb:
 		_readback_text.text = f.readback_text
-		if f.readback_ok:
+		_refresh_readback_table(f)
+		_accept_btn.disabled = desk.readback_hard and desk.readback_unmarked(f) > 0
+		if desk.readback_hard:
+			# 高阶模式不告诉玩家对错，这是这一档的核心压力
+			_readback_diff.text = ""
+		elif f.readback_ok:
 			_readback_diff.text = "与许可要素一致"
 			_readback_diff.add_theme_color_override("font_color", AtcTheme.C_ACCENT)
 		else:
@@ -1187,8 +1208,90 @@ func _select_item(opt: OptionButton, index: int) -> void:
 		opt.selected = index
 
 
-# ---------------------------------------------------------------- 通播（规范 §3）
+# ---------------------------------------------------------------- 复诵核对（规范 §6）
 
+## 逐项比对表：简易模式直接给结论，高阶模式只给"未核对"，让玩家自己判。
+func _refresh_readback_table(f: Flight) -> void:
+	if _rb_grid == null:
+		return
+	for c in _rb_grid.get_children():
+		c.queue_free()
+	for h in ["项目", "许可", "复诵", "判定"]:
+		_rb_grid.add_child(_label(h, 10, 700, AtcTheme.C_TEXT_FAINT))
+	var hard := desk.readback_hard
+	for it in f.readback_items:
+		var d: Dictionary = it
+		var same := bool(d.get("same", true))
+		_rb_grid.add_child(_label(String(d.get("label", "")), 12, 500,
+			AtcTheme.C_TEXT_SOFT))
+		_rb_grid.add_child(_label(String(d.get("expected", "")), 12, 400,
+			AtcTheme.C_TEXT_DIM))
+		_rb_grid.add_child(_label(String(d.get("actual", "")), 12, 400,
+			AtcTheme.C_TEXT if (hard or same) else AtcTheme.C_DANGER))
+		if hard:
+			_rb_grid.add_child(_mark_button(f, String(d.get("key", ""))))
+		else:
+			_rb_grid.add_child(_label("✓ 一致" if same else "✕ 不一致", 11, 700,
+				AtcTheme.C_ACCENT_DIM if same else AtcTheme.C_DANGER))
+	_refresh_rb_timer(f)
+
+
+func _mark_button(f: Flight, key: String) -> Button:
+	var marked: bool = f.readback_marks.has(key)
+	var ok_mark := bool(f.readback_marks.get(key, true))
+	var txt := "未核对"
+	var col := AtcTheme.C_TEXT_FAINT
+	if marked:
+		txt = "一致" if ok_mark else "不一致"
+		col = AtcTheme.C_ACCENT if ok_mark else AtcTheme.C_DANGER
+	var b := Button.new()
+	b.text = txt
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(76.0 * AtcTheme.UI_SCALE, 24.0 * AtcTheme.UI_SCALE)
+	b.add_theme_font_override("font", AtcTheme.font(600))
+	b.add_theme_font_size_override("font_size", AtcTheme.fs(12))
+	b.add_theme_color_override("font_color", col)
+	b.add_theme_color_override("font_hover_color", col)
+	var n := StyleBoxFlat.new()
+	n.bg_color = Color(1, 1, 1, 0.05)
+	n.border_color = Color(1, 1, 1, 0.14)
+	n.set_border_width_all(1)
+	n.set_corner_radius_all(2)
+	b.add_theme_stylebox_override("normal", n)
+	var h := n.duplicate() as StyleBoxFlat
+	h.bg_color = Color(1, 1, 1, 0.12)
+	b.add_theme_stylebox_override("hover", h)
+	b.add_theme_stylebox_override("pressed", h)
+	b.pressed.connect(_on_mark_readback.bind(key))
+	return b
+
+
+func _on_mark_readback(key: String) -> void:
+	if desk == null or _selected == "":
+		return
+	var f := desk.get_flight(_selected)
+	if f == null:
+		return
+	# 未核对 → 一致 → 不一致 → 一致 ……
+	var next := true
+	if f.readback_marks.has(key):
+		next = not bool(f.readback_marks[key])
+	desk.mark_readback_item(_selected, key, next, now)
+	refresh()
+
+
+func _refresh_rb_timer(f: Flight) -> void:
+	if _rb_timer == null:
+		return
+	if desk.readback_hard and f.readback_deadline > 0.0:
+		var left := maxf(0.0, f.readback_deadline - now)
+		_rb_timer.text = "剩余 %.0f 秒（超时退回，需要重新发布）" % left
+		_rb_timer.add_theme_color_override("font_color", AtcTheme.C_WARM)
+	else:
+		_rb_timer.text = ""
+
+
+# ---------------------------------------------------------------- 通播（规范 §3）
 func _refresh_atis() -> void:
 	if _atis_state_label == null or desk == null:
 		return
