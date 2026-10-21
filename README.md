@@ -260,3 +260,32 @@ v0.0.1
 - 机场数据：JSON + 结构校验，会话顶栏显示值班频率
 - `设置` 仍是占位页；席位面板是占位区（下一步）
 
+---
+
+## 版本与发布（按版本号分支，不覆盖旧版本）
+
+每个版本都固定成一个独立分支 `vX.Y.Z` 和一个同名 tag，**创建后永不再改动**，
+所以任何一版都能随时取回：
+
+```
+main       最新版本（持续开发）
+v0.0.1     已固定，不再改动
+v0.0.2     已固定，不再改动
+```
+
+版本号只有一个来源：`core/version.gd` 里的 `MAJOR / MINOR / PATCH`。
+
+发布流程：
+
+1. 改 `core/version.gd` 把版本号加一
+2. 提交所有改动（工作区必须干净）
+3. 运行 `powershell -ExecutionPolicy Bypass -File tools\release.ps1`
+
+脚本会读出版本号，建立并推送 `vX.Y.Z` 分支与 tag。
+**如果该版本分支或 tag 已存在，脚本直接拒绝退出**（不会用 -f 覆盖）。
+
+先看会发生什么、不真正推送：
+
+```
+powershell -ExecutionPolicy Bypass -File tools\release.ps1 -DryRun
+```
