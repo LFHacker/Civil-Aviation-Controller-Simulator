@@ -90,6 +90,11 @@ var atis_suspect := false
 ## 已经发生的特情描述；空串表示正常
 var emergency := ""
 
+## 复诵确认后多久机组会主动报"地面准备好了"（07 §5.1）
+var ground_ready_at := -1.0
+## 这句话是否已经说过
+var ground_ready_said := false
+
 ## ---- 飞行计划原值：放行前要与"当前有效值"逐项对照（放行机制规范 §1.2）----
 var plan_origin := ""      # 计划起飞机场
 var plan_route := ""       # 计划航路
@@ -196,6 +201,8 @@ func to_dict() -> Dictionary:
 		"pilot_waiting": pilot_waiting,
 		"atis_suspect": atis_suspect,
 		"emergency": emergency,
+		"ground_ready_at": ground_ready_at,
+		"ground_ready_said": ground_ready_said,
 		"atis_notified": atis_notified,
 	}
 
@@ -270,6 +277,8 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.pilot_waiting = bool(d.get("pilot_waiting", false))
 	f.atis_suspect = bool(d.get("atis_suspect", false))
 	f.emergency = str(d.get("emergency", ""))
+	f.ground_ready_at = float(d.get("ground_ready_at", -1.0))
+	f.ground_ready_said = bool(d.get("ground_ready_said", false))
 	return f
 
 

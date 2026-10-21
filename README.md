@@ -241,6 +241,13 @@ candidate_error 开关（08 §2.4）打开后，候选里会混一条**修正海
 121.950 → 幺两幺点勾五洞。槽位骨架 clearance_slots() / request_slots()
 给出固定文本 + 槽位的结构，ssemble / missing_slots / check_slots 负责拼装与校验。
 
+**各席位通话类型清单（08 §7）** 落在 Radio.CALL_TYPES：
+放行席 5 类、地面席 5 类（申请推出/开车、发布推出开车许可、申请滑行、发布滑行许可、移交塔台）、
+塔台席 3 类，进近/区域留空待扩展。后面做那些席位时照这张表实现，不用再翻文档。
+
+**教学引导（08 §10）**：Radio.teaching_hint(mode) 按对话模式给一句话提示，
+显示在放行席提示区（"点下面任意一条候选通话即可发出" / "逐项选好…" / "语音档未接入，用文本代替"）。
+
 ⚠️ **语音档（08 §4）没做**：需要 ASR + LLM 解析 + TTS，本机没有接入。
 目前用"自由文本 + 关键词解析"占位，播报与识别都在文档里标为待接入。
 
@@ -517,6 +524,9 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # 窗口设置（显示模式/尺寸/显示器/配置损坏兜底）：37 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_window.gd
 
+# 教学 / 通话清单 / 地面准备好了：22 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_guide.gd
+
 # 通播编辑/特情/复诵等待：30 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_emergency.gd
 
@@ -556,7 +566,7 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 
 ## 当前状态
 
-v0.1.9
+v0.1.10
 
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
@@ -586,7 +596,7 @@ v0.0.2     已固定，不再改动
 v0.1.0     已固定，不再改动
 v0.1.1     已固定，不再改动
 v0.1.2     已固定，不再改动
-v0.1.9     已固定，不再改动
+v0.1.10     已固定，不再改动
 ```
 
 版本号只有一个来源：`core/version.gd` 里的 `MAJOR / MINOR / PATCH`。

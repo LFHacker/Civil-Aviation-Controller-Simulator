@@ -791,6 +791,18 @@ func _tick_readback_waiting(sim_time: float) -> void:
 			fl.callsign, int(sim_time - fl.t_readback)])
 
 
+## 07 §5.1：复诵确认后机组主动报"地面准备好了，呼号"（2–5 秒后，只说一次）
+func _tick_ground_ready(sim_time: float) -> void:
+	for f in flights:
+		var fl := f as Flight
+		if fl.ground_ready_said or fl.ground_ready_at < 0.0:
+			continue
+		if fl.handed_off or sim_time < fl.ground_ready_at:
+			continue
+		fl.ground_ready_said = true
+		_log(sim_time, "pilot", "地面准备好了，%s。" % fl.callsign)
+
+
 ## 该项是否正在协调中（界面显示「协调中…」）
 func review_coordinating(callsign: String, key: String) -> bool:	return _coord.has("%s|%s" % [callsign, key])
 
@@ -1608,6 +1620,7 @@ func tick(sim_time: float) -> void:
 	_tick_pilot_requery(sim_time)
 	_tick_emergency(sim_time)
 	_tick_readback_waiting(sim_time)
+	_tick_ground_ready(sim_time)
 	for f in flights:
 		if f.state != Flight.State.SENT:
 			continue
@@ -1860,6 +1873,9 @@ func accept_readback(callsign: String, sim_time: float) -> Dictionary:
 	f.state = Flight.State.CLEARED
 	f.t_cleared = sim_time
 	f.readback_deadline = -1.0
+	# 07 §5.1：复诵确认后机组会主动报"地面准备好了"（随机 2–5 秒）
+	f.ground_ready_at = sim_time + 2.0 + rng.randf() * 3.0
+	f.ground_ready_said = false
 	cleared_count += 1
 	_log(sim_time, "atc", "%s，复诵正确，放行完成，联系地面。" % f.callsign)
 	return {"ok": true, "error": "", "correct": true}

@@ -1282,7 +1282,8 @@ func _refresh_detail() -> void:
 			_hint.text = "先确认修正海压 QNH 才能发许可"
 			_hint.add_theme_color_override("font_color", AtcTheme.C_WARM)
 		else:
-			_hint.text = "计划已核对，可以发放行许可"
+			_hint.text = "计划已核对，可以发放行许可。" + Radio.teaching_hint(
+				desk.issue_mode)
 			_hint.add_theme_color_override("font_color", AtcTheme.C_ACCENT)
 	elif f.state == Flight.State.SENT:
 		_hint.text = "许可已发出，等待机组复诵…"

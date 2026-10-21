@@ -122,7 +122,52 @@ static func missing_slots(slots: Array, filled: Dictionary) -> Array:
 	return out
 
 
-## 校验结果：返回 {ok, error}
+## 各席位的通话类型清单（08 §7）。地面/塔台/进近还没有玩法，先把清单落成数据，
+## 后面做那些席位时按这张表实现，不用再翻文档。
+const CALL_TYPES := {
+	"delivery": [
+		{"type": "申请放行", "dir": "pilot",
+			"items": ["位置", "机型", "ATIS 状态", "目的地"]},
+		{"type": "发布放行许可", "dir": "atc",
+			"items": ["七项法定要素", "离场情报"]},
+		{"type": "复诵", "dir": "pilot", "items": ["安全关键项", "完整呼号"]},
+		{"type": "复诵确认/纠正", "dir": "atc", "items": ["确认", "或正确内容"]},
+		{"type": "移交地面", "dir": "atc", "items": ["地面席频率"]},
+	],
+	"ground": [
+		{"type": "申请推出/开车", "dir": "pilot", "items": ["呼号", "位置", "请求"]},
+		{"type": "发布推出/开车许可", "dir": "atc",
+			"items": ["推出方向", "使用跑道", "开车许可"]},
+		{"type": "申请滑行", "dir": "pilot", "items": ["呼号", "位置", "请求"]},
+		{"type": "发布滑行许可", "dir": "atc",
+			"items": ["滑行路线", "等待点", "跑道号"]},
+		{"type": "移交塔台", "dir": "atc", "items": ["塔台频率"]},
+	],
+	"tower": [
+		{"type": "申请起飞", "dir": "pilot", "items": ["呼号", "位置", "请求"]},
+		{"type": "发布起飞许可", "dir": "atc",
+			"items": ["跑道号", "起飞许可", "风向风速"]},
+		{"type": "移交进近/区调", "dir": "atc", "items": ["后续管制单位频率"]},
+	],
+	"approach": [],
+	"center": [],
+}
+
+
+## 某席位需要支持的通话类型（08 §7）
+static func call_types(seat: String) -> Array:
+	var t: Variant = CALL_TYPES.get(seat, [])
+	return t if t is Array else []
+
+
+## 教学引导（08 §10）：首次上手时按对话模式给一句话提示
+static func teaching_hint(mode: String) -> String:
+	if mode == "preset":
+		return "点下面任意一条候选通话即可发出；不确定就先用「请稍等」。"
+	if mode == "text":
+		return "输入完整通话，系统按关键词校验七项要素（语音档未接入，用文本代替）。"
+	return "逐项选好离场程序、高度、应答机，再点「发放行许可」。"
+
 static func check_slots(slots: Array, filled: Dictionary) -> Dictionary:
 	var miss := missing_slots(slots, filled)
 	if not miss.is_empty():
