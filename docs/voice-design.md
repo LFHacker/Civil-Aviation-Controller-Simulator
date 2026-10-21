@@ -1,7 +1,8 @@
 # 语音方案（08 §4）— 实测记录与取舍
 
-> 状态：**听** 的处理链路已完整实现并端到端验证；
-> **说** 的片段库与生成脚本已就绪，等定音色接播放器。
+> 状态：**听**、**说** 两条链路都已接进游戏。
+> 听：按住通话 → 麦克风 → 闭集识别 → 逐项判定（v0.1.14）。
+> 说：片段库 + 播放器 + 选项开关（v0.1.15），片段本身是离线生成的产物、不入库。
 > 本文里的数字都是在本机实测的，不是估的。
 
 ---
@@ -141,17 +142,53 @@ volume=2.4, alimiter=limit=0.9
   `sim/voice.gd` 和 `manifest.json` 一个字都不用改。
   这也是为什么逻辑层只认片段 id、不认引擎。
 
-### 2.6 待办
+### 2.6 已落地（v0.1.15）
 
-- [ ] `VoicePlayer`（Godot 侧：按 `Voice.*` 的顺序播、避免抢麦、支持跳过）
-- [ ] 生成好的片段库入库（现在生成到 `_scratch`，未入库，等定音色）
-- [ ] 选项里加开关（关闭语音 / 只播机组 / 全播）
-- [ ] 接进 `delivery_panel.gd` 的放行与复诵
+| 组件 | 作用 |
+|---|---|
+| `sim/voice_library.gd` | 清单、缺件降级、角色分库（管制/机组两套音色）、时长估算、直接读 OGG 成流 |
+| `ui/voice_player.gd` | 逐片段播放（片间 45 ms 余量）、新通话顶掉旧的（半双工）、缺片跳过不卡死 |
+| `DeliveryDesk.speak_enabled` | 播放开关，跟着 `settings.cfg` 持久化（选项 →「语音播报」） |
+| 面板钩子 | 许可真发出去时读管制那句；复诵到点时读机组那句（同一份复诵只读一次） |
+
+**片段库不入库**（`.gitignore` 掉 `assets/audio/phrases/`）：
+它是 `python tools/gen_voice.py` 的离线产物，音色可换、许可证待定，
+所以仓库里只留生成脚本和清单格式，不把微软音色的音频带进版本历史。
+没有片段库时游戏**静默退回纯文字**，不报错、不装样子（有测试守着）。
+
+**不依赖 Godot 导入管线**：片段是玩家机器上后生成的，没有 `.import` 文件，
+`load()` 会失败；所以用 `AudioStreamOggVorbis.load_from_file()` 直接读字节建流。
+
+### 2.7 待办
+
+- [ ] 音色定版后再决定要不要把片段库随包分发（许可证问题）
+- [ ] 关掉语音后，机组复诵与许可是否还要保留字幕（现在是保留的）
+- [ ] 多机组音色区分（现在管制一套、机组一套；同一套内靠 `pitch_scale` 区分，尚未启用）
 
 ---
 
 ## 3. 落地顺序建议
 
-1. **先说后听**：说这边数据齐了，接 `VoicePlayer` + 选项开关就能玩；
-2. 听这边先做**复诵判定**（价值最高、语法最规整），再做自由问询；
-3. 两条都留"只用文字"的退路——键盘永远能完成全部操作。
+1. ~~**先说后听**~~ —— 实际是**先听再说**：听的判定价值更高、语法更规整；
+2. 听这边先做**复诵判定**（已完成），再做自由问询（未做）；
+3. 两条都留"只用文字"的退路——键盘永远能完成全部操作（已有）。
+
+### 3.1 怎么生成片段库
+
+```powershell
+python tools/gen_voice.py --voice zh-CN-YunxiNeural --out assets\audio\phrases\controller
+python tools/gen_voice.py --voice zh-CN-YunjianNeural --out assets\audio\phrases\pilot
+```
+
+然后选项 →「语音播报」开关会亮起来（没生成时显示「未生成片段」并禁用）。
+
+### 3.2 怎么复验
+
+```powershell
+# 语法 → 合成语音 → 真识别引擎 → 变体标签 → 逻辑层解析（32 项）
+powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
+
+# 取件层 / 玩家 / 面板（无头，不需要麦克风、不需要真音频）
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_library.gd
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_panel.gd
+```

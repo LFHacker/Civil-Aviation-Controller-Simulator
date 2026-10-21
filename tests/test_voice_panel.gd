@@ -31,7 +31,8 @@ func _process(_dt: float) -> bool:
 		10: _release()
 		12: _check_result()
 		14: _check_modes()
-		16: _finish()
+		16: _check_speak()
+		18: _finish()
 	return false
 
 
@@ -125,6 +126,44 @@ func _check_modes() -> void:
 	_check(_panel._voice_row.visible, "切回语音模式又出现")
 
 
+func _check_speak() -> void:
+	_section("语音播报（说）：开关与去重")
+	var lib := VoiceLibrary.new()
+	var has_lib := lib.ready_for("controller")
+	# 关着的时候绝不能播
+	_desk.speak_enabled = false
+	_panel._speak(Voice.clearance("ISS001", "RUMUK 8D", "ZBAA", 6000, "4321", 1013),
+		"controller")
+	_check(_panel._vp == null, "开关关闭时不创建播放器（不偷偷播）")
+	if not has_lib:
+		print("    （本机没生成片段库，只验开关；"
+			+ "python tools/gen_voice.py 后还会验取件）")
+		_check(not lib.ready_for("controller"), "没有片段库时明确未就绪")
+		# 即使打开开关，没有片段也不能报错
+		_desk.speak_enabled = true
+		_panel._speak(Voice.clearance("ISS001", "RUMUK 8D", "ZBAA", 6000, "4321", 1013),
+			"controller")
+		_check(true, "没有片段库时播报静默降级（不崩）")
+		return
+	# 打开后：许可应该取得到片段
+	_desk.speak_enabled = true
+	var ids := Voice.clearance("ISS001", "RUMUK 8D", "ZBAA", 6000, "4321", 1013)
+	_check(not lib.plan(ids, "controller").is_empty(), "许可片段取得全",
+		str(ids.size()))
+	_panel._speak(ids, "controller")
+	_check(_panel._vp != null and _panel._vp.enabled, "开关打开后播放器就位")
+	# 同一份复诵只读一次
+	var f := _desk.get_flight("ISS001")
+	f.state = Flight.State.READBACK
+	f.readback_at = 12.5
+	_panel._maybe_speak_readback(f)
+	var first := String(_panel._rb_spoken)
+	_check(first != "", "复诵会触发播报", first)
+	_panel._maybe_speak_readback(f)
+	_check(String(_panel._rb_spoken) == first, "同一份复诵不会重复读",
+		String(_panel._rb_spoken))
+
+
 func _finish() -> void:
 	if _panel._vin != null:
 		_panel._vin.asr.stop()
@@ -136,6 +175,11 @@ func _finish() -> void:
 		print("✓ 全部通过：%d 项断言" % _checks)
 	else:
 		print("✗ 失败 %d / %d 项断言" % [_fails, _checks])
+	# 不留悬挂节点，否则退出时会报 ObjectDB 泄漏（看着像失败）
+	if _panel != null and is_instance_valid(_panel):
+		if _panel._vp != null:
+			_panel._vp.stop()
+		_panel.free()
 	quit(0 if _fails == 0 else 1)
 
 

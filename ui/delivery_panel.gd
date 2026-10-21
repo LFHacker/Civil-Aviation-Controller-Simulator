@@ -66,6 +66,9 @@ var _voice_state: Label
 var _voice_text: Label
 var _vin: VoiceInput
 var _voice_busy := false
+## 语音播报（08 §4「说」）
+var _vp: VoicePlayer
+var _rb_spoken := ""
 var _dep_card: PanelContainer
 var _dep_grid: GridContainer
 var _dep_taxi_btn: Button
@@ -1359,6 +1362,7 @@ func _refresh_detail() -> void:
 	_update_preview()
 	_refresh_handoff(f)
 	_refresh_dep_info(f)
+	_maybe_speak_readback(f)
 	# 四种发布模式（规范 §5.1 + 08 §4 高级模式）：只有当前模式对应的控件可见
 	_cand_box.visible = desk.issue_mode == "preset" and can_issue
 	_text_row.visible = desk.issue_mode == "text" and can_issue
@@ -1747,6 +1751,12 @@ func _handle_issue_result(r: Dictionary) -> void:
 		_hint.text = String(r.error)
 		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 		return
+	# 真发出去了才朗读（08 §4「说」）：许可是管制自己说的那一句
+	var f := desk.get_flight(_selected)
+	if f != null and bool(r.ok) and not bool(r.get("queried", false)):
+		_speak(Voice.clearance(f.callsign, f.sid,
+			f.clearance_limit if f.clearance_limit != "" else f.destination,
+			f.initial_alt_m, f.squawk, int(desk.field.get("qnh", 0))), "controller")
 	refresh()
 	if bool(r.get("queried", false)):
 		_hint.text = String(r.error)
@@ -1858,6 +1868,39 @@ func _ensure_voice() -> void:
 	_vin = VoiceInput.new()
 	_vin.name = "VoiceInput"
 	add_child(_vin)
+
+
+## 语音播报组件（08 §4「说」）：只管播，播什么由 sim/voice.gd 决定
+func _ensure_player() -> VoicePlayer:
+	if _vp != null:
+		return _vp
+	_vp = VoicePlayer.new()
+	_vp.name = "VoicePlayer"
+	add_child(_vp)
+	return _vp
+
+
+## 该播的时候播；没开开关或没生成片段库就什么都不做（静默降级）
+func _speak(ids: Array, role: String) -> void:
+	if desk == null or not desk.speak_enabled:
+		return
+	var vp := _ensure_player()
+	vp.enabled = true
+	vp.play(ids, role)
+
+
+## 选中航班的复诵到点后自动读一遍（每份复诵只读一次）
+func _maybe_speak_readback(f: Flight) -> void:
+	if f == null or f.state != Flight.State.READBACK:
+		_rb_spoken = ""
+		return
+	var key := "%s|%.2f" % [f.callsign, f.readback_at]
+	if key == _rb_spoken:
+		return
+	_rb_spoken = key
+	_speak(Voice.readback(f.callsign, f.sid,
+		f.clearance_limit if f.clearance_limit != "" else f.destination,
+		f.initial_alt_m, f.squawk, int(desk.field.get("qnh", 0))), "pilot")
 
 
 ## 语法参数取**已发布的许可值**：机组该复诵的就是这些，玩家该说的也是这些。

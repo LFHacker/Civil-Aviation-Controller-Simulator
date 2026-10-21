@@ -21,3 +21,6 @@ docx/_extracted/
 
 # 语音识别助手（用 csc 现场编译，见 tools/test-listen.ps1）
 tools/atc-listen/*.exe
+
+# 语音片段是离线生成的产物（tools/gen_voice.py），音色来源与许可证见 docs/voice-design.md
+assets/audio/phrases/

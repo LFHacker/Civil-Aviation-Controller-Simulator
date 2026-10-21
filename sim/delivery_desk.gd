@@ -144,6 +144,9 @@ const MAX_REQUESTS := 3
 ## "preset" 预设一键 / "form" 填空式 / "text" 自由文本 / "voice" 真实语音（08 §4）
 var issue_mode := "form"
 ## ---- 高级模式：真实语音通话（08 §4）----
+## 语音播报（08 §4「说」）：管制发的许可、机组的复诵是否朗读出来。
+## 片段库是离线生成的；没有片段库时这一项自动无效（不会报错）。
+var speak_enabled := false
 ## 最近一次语音判定结果 {action, text, reason, kind...}，供面板回显
 var last_voice := {}
 ## 被判"没听清"的次数（进评分；教学关卡不该被扣太多）

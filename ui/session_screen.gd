@@ -258,6 +258,8 @@ const OPT_EXIT := 3
 const OPT_DIFF := 100
 const OPT_MODE := 200
 const OPT_CAND := 300
+## 语音播报开关（08 §4「说」）
+const OPT_SPEAK := 400
 const DIFF_NAMES := ["简易", "进阶", "高阶"]
 const DIFF_KEYS := ["easy", "normal", "hard"]
 const MODE_NAMES := ["预设一键", "填空式", "自由文本", "真实语音"]
@@ -269,6 +271,7 @@ var _opt_pause_btn: Button
 var _opt_diff_buttons: Array = []
 var _opt_mode_buttons: Array = []
 var _opt_cand_btn: Button
+var _opt_speak_btn: Button
 
 
 func _build_options_menu() -> void:
@@ -325,6 +328,8 @@ func _build_options_menu() -> void:
 		_opt_mode_buttons.append(b)
 	_opt_cand_btn = _option_button("", OPT_CAND)
 	col.add_child(_opt_cand_btn)
+	_opt_speak_btn = _option_button("", OPT_SPEAK)
+	col.add_child(_opt_speak_btn)
 	col.add_child(_option_divider())
 	col.add_child(_option_button("返回主菜单    ESC", OPT_EXIT))
 
@@ -404,6 +409,13 @@ func _refresh_option_texts() -> void:
 	if _opt_cand_btn != null:
 		var cand := d != null and d.candidate_error
 		_opt_cand_btn.text = ("☑ " if cand else "☐ ") + "含错误候选"
+	if _opt_speak_btn != null:
+		var speak := d != null and d.speak_enabled
+		var lib := VoiceLibrary.new()
+		var ready := lib.ready_for("controller")
+		_opt_speak_btn.text = ("☑ " if speak else "☐ ") + "语音播报" \
+			+ ("" if ready else "（未生成片段）")
+		_opt_speak_btn.disabled = not ready
 
 
 ## 难度/模式/候选开关变了，席位面板要重画（候选列表、哪个控件可见都跟着变）
@@ -455,6 +467,7 @@ func _save_game_settings() -> void:
 	cfg.set_value("game", "difficulty", session.delivery.difficulty)
 	cfg.set_value("game", "issue_mode", session.delivery.issue_mode)
 	cfg.set_value("game", "candidate_error", session.delivery.candidate_error)
+	cfg.set_value("game", "speak_enabled", session.delivery.speak_enabled)
 	cfg.save("user://settings.cfg")
 
 
@@ -469,11 +482,20 @@ func _load_game_settings() -> void:
 	d.difficulty = str(cfg.get_value("game", "difficulty", d.difficulty))
 	d.issue_mode = str(cfg.get_value("game", "issue_mode", d.issue_mode))
 	d.candidate_error = bool(cfg.get_value("game", "candidate_error", d.candidate_error))
+	d.speak_enabled = bool(cfg.get_value("game", "speak_enabled", d.speak_enabled))
 	d.readback_hard = d.difficulty == "hard"
 	d.handoff_hard = d.difficulty == "hard"
 
 
 func _on_option_selected(id: int) -> void:
+	if id == OPT_SPEAK:
+		if session != null and session.delivery != null:
+			session.delivery.speak_enabled = not session.delivery.speak_enabled
+			_save_game_settings()
+			_refresh_seat_panel()
+		_options_layer.visible = false
+		_on_options_pressed()
+		return
 	if id == OPT_CAND:
 		if session != null and session.delivery != null:
 			session.delivery.candidate_error = not session.delivery.candidate_error

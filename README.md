@@ -265,6 +265,8 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 | `DeliveryDesk.issue_voice()` | §4.3 三种回退语义：置信度低/解析不出 → **模拟驾驶舱"没听清"重新呼叫**（不是提示玩家重输）；呼号不符 → "呼号不符，请确认" |
 | `DeliveryDesk.apply_voice_readback()` | 变体规则名 → 逐项复诵标记，与玩家手点的 `mark_readback_item()` 落到同一份数据 |
 | `tools/atc-listen/AtcListen.exe` | 常驻识别助手（C# + SAPI，stdin 收命令 / stdout 回 JSON），引擎只初始化一次 |
+| `sim/voice_library.gd` | 片段清单、缺件降级、管制/机组分库、直接读 OGG 成流（不走 Godot 导入管线） |
+| `ui/voice_player.gd` | 逐片段播放、半双工打断、缺片跳过；由 `DeliveryDesk.speak_enabled` 开关 |
 
 **玩法上怎么用**：选项 →「许可发布模式」选 **真实语音**，右栏出现「按下通话」按钮：
 按住说话、松开识别；待复核复诵时同一个键用来识别机组复诵。
@@ -274,13 +276,21 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 **38–81 ms、置信度 95.6–99.5%**；对照开放式听写是 1047 ms / 置信度 32% 且完全读错。
 识别出的文本还能被逻辑层正确解析成七项要素（这一步单独验过）。
 
-**说（未接播放器）**——**不按整句合成**（要联网要 key），改成 49 条片段拼装 + 电台滤波
+**说（已接播放器）**——**不按整句合成**（要联网要 key），改成 49 条片段拼装 + 电台滤波
 （窄带 300–2700 Hz + 压限），合计 284 KB / 38 s，运行时零延迟零联网。
 逻辑层 `sim/voice.gd` 只输出片段 id，换任何 TTS 引擎都不用改；
 生成脚本 `tools/gen_voice.py`，试听 `tools/dump_voice_plan.gd`（把逻辑层输出 dump 出来拼接）。
 
-**还没接的**：`VoicePlayer`（播放）、麦克风实时采集与判停、面板上的「按住通话」与转录显示、选项开关。
-所以现在玩家仍然用文本/预设/填空三种模式通话，语音链路本身已可跑通与复验。
+**玩法上怎么用**：先生成片段库（见 [docs/voice-design.md](docs/voice-design.md) §3.1），
+选项 →「语音播报」开关就会亮起来；打开后发许可会读管制那句、复诵到点会读机组那句
+（同一份复诵只读一次）。没有片段库时按钮显示「未生成片段」并禁用，播报**静默退回纯文字**。
+
+⚠️ 片段库**不入库**（`.gitignore` 掉 `assets/audio/phrases/`）：它是离线产物，音色可换、
+许可证待定，仓库里只留生成脚本与清单格式。片段用 `AudioStreamOggVorbis.load_from_file()`
+直接读字节，**不走 Godot 导入管线**——后生成的文件没有 `.import`，`load()` 会失败。
+
+**还没接的**：麦克风的判停（现在是松开即结束）、§4.4 的「数值朗读 / 模板朗读」两个辅助开关、
+05 语音自由问询（现在只覆盖许可与复诵两类通话）。
 
 ### AI 驾驶舱（07 文档）
 
@@ -586,8 +596,11 @@ powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
 # 识别助手客户端（WAV 写入 / JSON / 双向管道 / 错误路径，无需麦克风）：23 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_asr.gd
 
-# 语音面板（按住通话回调、模式切换、失败路径，无需真人说话）：17 项断言
+# 语音面板（按住通话回调、模式切换、失败路径、播报开关，无需真人说话）：22 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_panel.gd
+
+# 语音片段库（缺件降级/角色分库/时长/直接读 OGG）：20 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_library.gd
 
 # AI 驾驶舱（质疑/重申请/错误注入/种子）：32 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_pilot.gd
@@ -622,7 +635,7 @@ powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
 
 ## 当前状态
 
-v0.1.14
+v0.1.15
 
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
@@ -659,6 +672,7 @@ v0.1.2     已固定，不再改动
 v0.1.12     已固定，不再改动
 v0.1.13     已固定，不再改动
 v0.1.14     已固定，不再改动
+v0.1.15     已固定，不再改动
 ```
 
 版本号只有一个来源：`core/version.gd` 里的 `MAJOR / MINOR / PATCH`。
