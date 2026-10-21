@@ -611,6 +611,90 @@ func max_readback_errors() -> int:
 	return 2 if difficulty == "hard" else 1
 
 
+# ---------------------------------------------------------------- 简易模式候选通话（08 §2）
+
+## 是否在候选里混一条数值错误的（规范 §2.4，默认关闭）
+var candidate_error := false
+
+## 当前这架能发哪些通话。返回 [{id,text,kind,correct,hint}]，2-4 条。
+## 候选不是随机拼的，全部按当前状态过滤——复诵没确认时不会冒出移交指令。
+func radio_candidates(callsign: String) -> Array:
+	var f := get_flight(callsign)
+	if f == null:
+		return []
+	var out: Array = []
+	var limit := f.clearance_limit if f.clearance_limit != "" else f.destination
+
+	if f.state == Flight.State.PENDING:
+		# 完整许可（正确的一条）
+		var good := "%s，许可放行至 %s，按 %s 离场，经 %s，初始高度 %d 米，应答机 %s，修正海压 %d。" % [
+			f.callsign, limit, f.sid, f.route, f.initial_alt_m, f.squawk,
+			int(field.get("qnh", 0))]
+		out.append({"id": "clr", "text": good, "kind": "clearance",
+			"correct": true, "hint": "完整许可"})
+		# 含错误候选（规范 §2.4）：把修正海压改错
+		if candidate_error:
+			var qnh := int(field.get("qnh", 0))
+			var bad_qnh := qnh + 5 if qnh > 0 else 1013
+			var bad := good.replace("修正海压 %d" % qnh, "修正海压 %d" % bad_qnh)
+			out.append({"id": "clr_bad", "text": bad, "kind": "clearance",
+				"correct": false, "hint": "修正海压写错"})
+		out.append({"id": "wait", "text": "%s，请稍等。" % f.callsign,
+			"kind": "wait", "correct": true, "hint": "让机组等一下"})
+		out.append({"id": "repeat", "text": "%s，重复一遍。" % f.callsign,
+			"kind": "repeat", "correct": true, "hint": "没听清"})
+	elif f.state == Flight.State.READBACK:
+		out.append({"id": "rb_ok", "text": "%s，复诵正确。" % f.callsign,
+			"kind": "accept", "correct": true, "hint": "复诵一致"})
+		out.append({"id": "rb_bad", "text": "%s，复诵有误，重新发布许可。" % f.callsign,
+			"kind": "reissue", "correct": true, "hint": "复诵不一致"})
+	elif f.state == Flight.State.CLEARED and not f.handed_off:
+		var g := str(field.get("ground_freq", ""))
+		out.append({"id": "handoff", "text": "%s，联系地面 %s，再见。" % [f.callsign, g],
+			"kind": "handoff", "correct": true, "hint": "移交给地面席"})
+	else:
+		out.append({"id": "wait", "text": "%s，请稍等。" % f.callsign,
+			"kind": "wait", "correct": true, "hint": "让机组等一下"})
+	return out
+
+
+## 简易模式：把选中的那条候选真正执行掉。返回值与对应动作一致。
+func send_candidate(callsign: String, cand_id: String, sim_time: float) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	var cand: Dictionary = {}
+	for c in radio_candidates(callsign):
+		if String((c as Dictionary).id) == cand_id:
+			cand = c
+			break
+	if cand.is_empty():
+		return {"ok": false, "error": "这条通话现在不适用"}
+
+	var text := String(cand.text)
+	match String(cand.kind):
+		"clearance":
+			# issue_clearance 自己会把完整许可写进通话记录，这里不要再记一遍
+			return issue_clearance(callsign, f.sid, f.initial_alt_m, f.squawk, sim_time)
+		"accept":
+			return accept_readback(callsign, sim_time)
+		"reissue":
+			return reissue(callsign, sim_time)
+		"handoff":
+			return handoff_ground(callsign, sim_time)
+		"repeat":
+			_log(sim_time, "atc", text)
+			_log(sim_time, "pilot", "%s，重复：许可放行至 %s。" % [
+				f.callsign,
+				f.clearance_limit if f.clearance_limit != "" else f.destination])
+			return {"ok": true, "error": ""}
+		_:
+			# 请稍等：机组回一句就完事
+			_log(sim_time, "atc", text)
+			_log(sim_time, "pilot", "%s，收到，稍等。" % f.callsign)
+			return {"ok": true, "error": ""}
+
+
 ## 该项是否正在协调中（界面显示「协调中…」）
 func review_coordinating(callsign: String, key: String) -> bool:	return _coord.has("%s|%s" % [callsign, key])
 

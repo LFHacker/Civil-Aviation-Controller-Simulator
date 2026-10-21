@@ -53,7 +53,7 @@ var _rb_timer: Label
 var _handoff_card: PanelContainer
 var _handoff_grid: GridContainer
 var _tidy_btn: Button
-var _preset_btn: Button
+var _cand_box: VBoxContainer
 var _text_row: HBoxContainer
 var _text_edit: LineEdit
 var _text_btn: Button
@@ -550,10 +550,10 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	action_row.add_child(_hint)
 
-	# 预设一键模式（规范 §5.1 模式 A）
-	_preset_btn = _action_button("一键发送预设许可", AtcTheme.C_ACCENT)
-	_preset_btn.pressed.connect(_on_issue_preset)
-	egrid.add_child(_preset_btn)
+	# 预设一键模式（规范 §5.1 模式 A）：08 的简易对话就是"点一条候选"
+	_cand_box = VBoxContainer.new()
+	_cand_box.add_theme_constant_override("separation", 4)
+	egrid.add_child(_cand_box)
 
 	# 自由文本模式（规范 §5.1 模式 C）：语音识别出文本之后走的也是这条
 	_text_row = HBoxContainer.new()
@@ -1315,8 +1315,10 @@ func _refresh_detail() -> void:
 	_refresh_handoff(f)
 	_refresh_dep_info(f)
 	# 三种发布模式（规范 §5.1）：只有当前模式对应的控件可见
-	_preset_btn.visible = desk.issue_mode == "preset" and can_issue
+	_cand_box.visible = desk.issue_mode == "preset" and can_issue
 	_text_row.visible = desk.issue_mode == "text" and can_issue
+	if _cand_box.visible:
+		_refresh_candidates()
 
 
 func _select_item(opt: OptionButton, index: int) -> void:
@@ -1618,6 +1620,53 @@ func _refresh_dep_info(f: Flight) -> void:
 		if not cb.disabled:
 			cb.toggled.connect(func(_on: bool) -> void: _on_toggle_dep(key))
 		_dep_grid.add_child(cb)
+
+
+## 简易对话模式（08 §2）：把当前适用的候选通话列出来，点哪条发哪条。
+func _refresh_candidates() -> void:
+	if _cand_box == null:
+		return
+	for c in _cand_box.get_children():
+		c.queue_free()
+	if desk == null or _selected == "":
+		return
+	for cand in desk.radio_candidates(_selected):
+		var d: Dictionary = cand
+		var b := Button.new()
+		b.text = String(d.text)
+		b.tooltip_text = String(d.hint)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(0, 32.0 * AtcTheme.UI_SCALE)
+		b.add_theme_font_override("font", AtcTheme.font(400))
+		b.add_theme_font_size_override("font_size", AtcTheme.fs(13))
+		var good := bool(d.get("correct", true))
+		b.add_theme_color_override("font_color",
+			AtcTheme.C_TEXT_SOFT if good else AtcTheme.C_WARM)
+		b.add_theme_color_override("font_hover_color",
+			AtcTheme.C_ACCENT if good else AtcTheme.C_DANGER)
+		var n := StyleBoxFlat.new()
+		n.bg_color = Color(1, 1, 1, 0.04)
+		n.border_color = Color(1, 1, 1, 0.10)
+		n.set_border_width_all(1)
+		n.set_corner_radius_all(3)
+		n.content_margin_left = 10
+		n.content_margin_right = 10
+		n.content_margin_top = 6
+		n.content_margin_bottom = 6
+		b.add_theme_stylebox_override("normal", n)
+		var h := n.duplicate() as StyleBoxFlat
+		h.bg_color = Color(1, 1, 1, 0.10)
+		b.add_theme_stylebox_override("hover", h)
+		b.pressed.connect(_on_send_candidate.bind(String(d.id)))
+		_cand_box.add_child(b)
+
+
+func _on_send_candidate(cand_id: String) -> void:
+	if desk == null or _selected == "":
+		return
+	_handle_issue_result(desk.send_candidate(_selected, cand_id, now))
 
 
 ## 发出许可后的统一处理：被机组质疑要显眼地提示，而不是当成成功
