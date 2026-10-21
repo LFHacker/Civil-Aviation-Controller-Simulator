@@ -31,6 +31,12 @@ var _alt_opt: OptionButton
 var _squawk_edit: LineEdit
 var _qnh_value: Label
 var _qnh_btn: Button
+var _atis_state_label: Label
+var _atis_lamp: Label
+var _atis_update_btn: Button
+var _atis_fix_row: HBoxContainer
+var _atis_notify_btn: Button
+var _atis_report_btn: Button
 var _limit_label: Label
 var _route_label: Label
 var _preview: Label
@@ -592,6 +598,45 @@ func _build_editor(parent: HBoxContainer) -> void:
 	filler.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	right.add_child(filler)
 
+	# 通播卡（规范 §3）：状态、重大变化灯、更新与过期处置入口
+	var atis_card := PanelContainer.new()
+	var acsb := StyleBoxFlat.new()
+	acsb.bg_color = Color(1, 1, 1, 0.03)
+	acsb.border_color = Color(1, 1, 1, 0.08)
+	acsb.set_border_width_all(1)
+	acsb.set_corner_radius_all(3)
+	acsb.content_margin_left = 14
+	acsb.content_margin_right = 14
+	acsb.content_margin_top = 10
+	acsb.content_margin_bottom = 10
+	atis_card.add_theme_stylebox_override("panel", acsb)
+	right.add_child(atis_card)
+
+	var atis_col := VBoxContainer.new()
+	atis_col.add_theme_constant_override("separation", 6)
+	atis_card.add_child(atis_col)
+	atis_col.add_child(_label("通播  ATIS", 10, 700, AtcTheme.C_TEXT_FAINT))
+	_atis_state_label = _label("—", 13, 600, AtcTheme.C_TEXT)
+	atis_col.add_child(_atis_state_label)
+	_atis_lamp = _label("", 11, 500, AtcTheme.C_WARM)
+	atis_col.add_child(_atis_lamp)
+	_atis_update_btn = _action_button("按实况更新通播", AtcTheme.C_ACCENT)
+	_atis_update_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
+	_atis_update_btn.pressed.connect(_on_update_atis)
+	atis_col.add_child(_atis_update_btn)
+
+	_atis_fix_row = HBoxContainer.new()
+	_atis_fix_row.add_theme_constant_override("separation", 8)
+	atis_col.add_child(_atis_fix_row)
+	_atis_notify_btn = _action_button("通知最新通播", AtcTheme.C_WARM)
+	_atis_notify_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
+	_atis_notify_btn.pressed.connect(_on_notify_atis)
+	_atis_fix_row.add_child(_atis_notify_btn)
+	_atis_report_btn = _action_button("逐项通报变化", AtcTheme.C_TEXT_SOFT)
+	_atis_report_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
+	_atis_report_btn.pressed.connect(_on_report_atis)
+	_atis_fix_row.add_child(_atis_report_btn)
+
 	var info := PanelContainer.new()
 	var isb := StyleBoxFlat.new()
 	isb.bg_color = Color(1, 1, 1, 0.02)
@@ -839,6 +884,7 @@ func refresh() -> void:
 	_refresh_list()
 	_refresh_detail()
 	_refresh_log()
+	_refresh_atis()
 	_display.set_selected(_selected)
 	_display.queue_redraw()
 	if _tabs != null:
@@ -1139,6 +1185,68 @@ func _refresh_detail() -> void:
 func _select_item(opt: OptionButton, index: int) -> void:
 	if index >= 0 and index < opt.item_count:
 		opt.selected = index
+
+
+# ---------------------------------------------------------------- 通播（规范 §3）
+
+func _refresh_atis() -> void:
+	if _atis_state_label == null or desk == null:
+		return
+	_atis_state_label.text = desk.atis_status_text(now)
+	var major := desk.atis_major
+	if desk.enable_atis_lifecycle and major != "":
+		_atis_lamp.text = "⚠ 重大变化：%s" % major
+		_atis_lamp.add_theme_color_override("font_color", AtcTheme.C_WARM)
+	elif desk.atis.has_error:
+		_atis_lamp.text = "⚠ 本次通播的要素与实况不符"
+		_atis_lamp.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+	else:
+		_atis_lamp.text = ""
+	_atis_update_btn.visible = desk.enable_atis_lifecycle
+	# 过期时才需要处置；已经在提示区说明过就隐藏
+	var need_fix := desk.enable_atis_lifecycle and desk.atis_expired \
+		and _selected != ""
+	_atis_fix_row.visible = need_fix
+	if need_fix:
+		var f := desk.get_flight(_selected)
+		if f != null and f.atis_notified:
+			_atis_fix_row.visible = false
+
+
+func _on_update_atis() -> void:
+	var r := desk.update_atis({}, now)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	refresh()
+	_hint.text = "通播 %s 已发布%s" % [
+		str(r.get("alpha", "")),
+		"（要素与实况不符，注意）" if bool(r.get("has_error", false)) else ""]
+	_hint.add_theme_color_override("font_color",
+		AtcTheme.C_DANGER if bool(r.get("has_error", false)) else AtcTheme.C_ACCENT)
+
+
+func _on_notify_atis() -> void:
+	if _selected == "":
+		return
+	var r := desk.notify_latest_atis(_selected, now)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	refresh()
+
+
+func _on_report_atis() -> void:
+	if _selected == "":
+		return
+	var r := desk.report_atis_changes(_selected, now)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	refresh()
 
 
 func _refresh_log() -> void:

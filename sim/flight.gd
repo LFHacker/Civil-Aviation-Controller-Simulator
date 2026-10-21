@@ -90,6 +90,11 @@ var slot_delay_min := 0
 ## 修正海压是否由管制员确认过（第二百九十四条：QNH 不可因 ATIS 而豁免）
 var qnh_confirmed := false
 
+## 机组在首次呼叫里报的通播代号；没报就是空串
+var atis_reported := ""
+## 管制员已就该机组的过期通播做过处置（通知最新通播 / 逐项通报变化）
+var atis_notified := false
+
 ## 统计
 var reissue_count := 0
 
@@ -143,6 +148,8 @@ func to_dict() -> Dictionary:
 		"slot_eval": slot_eval,
 		"slot_delay_min": slot_delay_min,
 		"qnh_confirmed": qnh_confirmed,
+		"atis_reported": atis_reported,
+		"atis_notified": atis_notified,
 	}
 
 
@@ -196,6 +203,8 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.slot_eval = str(d.get("slot_eval", ""))
 	f.slot_delay_min = int(d.get("slot_delay_min", 0))
 	f.qnh_confirmed = bool(d.get("qnh_confirmed", false))
+	f.atis_reported = str(d.get("atis_reported", ""))
+	f.atis_notified = bool(d.get("atis_notified", false))
 	return f
 
 

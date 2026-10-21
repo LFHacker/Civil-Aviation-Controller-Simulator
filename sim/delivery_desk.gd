@@ -98,6 +98,16 @@ var enable_qnh_gate := false
 ## 数值校验（规范 §5.1 / §10）：应答机重复、高度不在协议带内
 var enable_value_check := false
 
+## ---- 通播（规范 §3）----
+## 当前播发；代号是版本指针，过期本身就是必须拦截的错误状态
+var atis := AtisBroadcast.new()
+## 是否启用生命周期（过期要处置）。默认关闭，让老测试照旧。
+var enable_atis_lifecycle := false
+## 由 tick 维护：当前通播是否已过期
+var atis_expired := false
+## 由 tick 维护：实况与通播相比是否触发了"重大变化"
+var atis_major := ""
+
 ## 进行中的「协调修改」：key 为 "呼号|字段"，value 为 {"ready_at": 秒}
 var _coord := {}
 
@@ -200,6 +210,15 @@ func apply_field(data: Dictionary) -> void:
 	}
 	var rr: Variant = data.get("review_ref", {})
 	review_ref = rr if rr is Dictionary else {}
+
+	# 开局时通播已按下发的字母播发过一次（发布时刻 = 开局时刻）
+	atis = AtisBroadcast.new()
+	atis.alpha = Atis.alpha_of(data)
+	atis.issued_min = Atis.minutes_since(str(data.get("clock_start", "0000")), 0.0)
+	atis.runway = str(field.get("runway", ""))
+	atis.wind = str(field.get("wind", ""))
+	atis.visibility = str(field.get("visibility", ""))
+	atis.qnh = int(field.get("qnh", 0))
 
 
 ## 取走计划里的下一条；没有计划或已用完时返回空字典。
@@ -393,6 +412,107 @@ func _pick_alternate() -> String:
 		var arr: Array = t
 		return str(arr[rng.randi_range(0, arr.size() - 1)])
 	return ""
+
+
+# ---------------------------------------------------------------- 通播（规范 §3）
+
+## 当前通播状态（有效 / 即将过期 / 已过期）
+func atis_state(sim_time: float) -> int:
+	return atis.state(now_minutes(sim_time))
+
+
+## "BRAVO 有效（12 分钟前发布）" 这种给人看的一行字
+func atis_status_text(sim_time: float) -> String:
+	var m := now_minutes(sim_time)
+	return "%s %s（%d 分钟前发布）" % [
+		atis.alpha, AtisBroadcast.state_text(atis.state(m)),
+		AtisBroadcast.age_minutes(atis.issued_min, m)]
+
+
+## 实况相对通播是否触发"重大变化"（风/能见度阈值）
+func atis_major_now() -> String:
+	return AtisBroadcast.major_change(atis.wind, atis.visibility,
+		str(field.get("wind", "")), str(field.get("visibility", "")))
+
+
+## 更新通播：代号由系统按字母推进，要素按玩家给的值写入。
+## **允许写入与实况不符的值**（规范 §3.2）—— 这就是"通播有误"的来源，
+## 会记在 has_error 上，供后续特情使用。
+func update_atis(opts: Dictionary, sim_time: float) -> Dictionary:
+	var qnh := int(opts.get("qnh", field.get("qnh", 0)))
+	if qnh <= 0:
+		return {"ok": false, "error": "通播必须包含修正海压（QNH）"}
+	var runway := str(opts.get("runway", field.get("runway", "")))
+	var wind := str(opts.get("wind", field.get("wind", "")))
+	var vis := str(opts.get("visibility", field.get("visibility", "")))
+	if runway == "":
+		return {"ok": false, "error": "通播必须写明使用跑道"}
+
+	atis.alpha = AtisBroadcast.next_alpha(atis.alpha)
+	atis.issued_min = now_minutes(sim_time)
+	atis.runway = runway
+	atis.wind = wind
+	atis.visibility = vis
+	atis.qnh = qnh
+	atis.transition_level = str(opts.get("transition_level", atis.transition_level))
+	if opts.has("brake"):
+		atis.brake = str(opts.get("brake", ""))
+	var hz: Variant = opts.get("hazards", null)
+	if hz is Array:
+		atis.hazards = hz
+	atis.has_error = AtisBroadcast.values_differ(
+		{"runway": runway, "wind": wind, "visibility": vis, "qnh": qnh},
+		{"runway": str(field.get("runway", "")),
+			"wind": str(field.get("wind", "")),
+			"visibility": str(field.get("visibility", "")),
+			"qnh": int(field.get("qnh", 0))})
+	atis.update_count += 1
+	atis_expired = false
+	atis_major = ""
+	_log(sim_time, "atc", "通播 %s 已发布：使用跑道 %s，修正海压 %d。" % [
+		atis.alpha, runway, qnh])
+	return {"ok": true, "error": "", "alpha": atis.alpha, "has_error": atis.has_error}
+
+
+## 过期处置之一：通知机组最新通播代号
+func notify_latest_atis(callsign: String, sim_time: float) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	f.atis_notified = true
+	f.atis_reported = atis.alpha
+	_log(sim_time, "atc", "%s，最新通播是 %s，请抄收后再申请放行。"
+		% [f.callsign, atis.alpha])
+	return {"ok": true, "error": ""}
+
+
+## 过期处置之二：把变化的部分逐项通报给机组
+func report_atis_changes(callsign: String, sim_time: float) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	f.atis_notified = true
+	f.atis_reported = atis.alpha
+	var parts := PackedStringArray()
+	parts.append("使用跑道 %s" % atis.runway)
+	if atis.wind != "":
+		parts.append("地面风 %s" % atis.wind)
+	if atis.visibility != "":
+		parts.append("能见度 %s" % atis.visibility)
+	if atis.qnh > 0:
+		parts.append("修正海压 %d" % atis.qnh)
+	_log(sim_time, "atc", "%s，通播 %s 已更新：%s。" % [
+		f.callsign, atis.alpha, "，".join(parts)])
+	return {"ok": true, "error": ""}
+
+
+## 通播闸门：过期且机组没被处置过 → 不许放行
+func atis_gate_ok(f: Flight) -> bool:
+	if not enable_atis_lifecycle:
+		return true
+	if f.atis_notified:
+		return true
+	return not atis_expired
 
 
 # ---------------------------------------------------------------- 移交
@@ -717,6 +837,9 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 		return {"ok": false, "error": "应答机必须是 4 位八进制数（0-7）"}
 	if enable_qnh_gate and not f.qnh_confirmed:
 		return {"ok": false, "error": "请先在许可表单里确认修正海压（QNH）"}
+	if enable_atis_lifecycle and not atis_gate_ok(f):
+		return {"ok": false, "error":
+			"通播 %s 已过期，请先「通知最新通播」或「逐项通报变化」" % atis.alpha}
 	if enable_value_check:
 		var dup := squawk_owner(squawk, callsign)
 		if dup != "":
@@ -850,12 +973,31 @@ func require_atis(callsign: String, sim_time: float) -> Dictionary:
 func tick(sim_time: float) -> void:
 	check_delay_notices(sim_time)
 	_tick_coordination(sim_time)
+	_tick_atis(sim_time)
 	for f in flights:
 		if f.state != Flight.State.SENT:
 			continue
 		if sim_time < f.readback_at:
 			continue
 		_generate_readback(f, sim_time)
+
+
+## 通播随仿真时钟自然变旧；实况与通播的差异在这里检测。
+func _tick_atis(sim_time: float) -> void:
+	if not enable_atis_lifecycle:
+		return
+	var st := atis_state(sim_time)
+	if st == AtisBroadcast.EXPIRED and not atis_expired:
+		atis_expired = true
+		_log(sim_time, "system",
+			"通播 %s 已超过 %d 分钟未更新，已过期。" % [
+				atis.alpha, AtisBroadcast.EXPIRE_MIN])
+	elif st != AtisBroadcast.EXPIRED:
+		atis_expired = false
+	var reason := atis_major_now()
+	if reason != "" and atis_major == "":
+		atis_major = reason
+		_log(sim_time, "system", "实况出现重大变化（%s），应立即更新通播。" % reason)
 
 
 func _tick_coordination(sim_time: float) -> void:
