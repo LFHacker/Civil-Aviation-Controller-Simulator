@@ -75,6 +75,16 @@ var dep_info_notified: Array = []
 ## 发放行许可时还漏报了几条离场情报（进评分）
 var dep_info_skipped := 0
 
+## ---- AI 驾驶舱（07 文档）----
+## 机组已经质疑过几次（连续质疑上限 2 次，第三次就接受）
+var pilot_queries := 0
+## 机组已经呼叫过几次（最多 3 次，之后转"机组等待中"）
+var request_count := 1
+## 最近一次呼叫的仿真时刻
+var last_request_at := 0.0
+## 三次申请都没人理 → 机组不再主动呼叫
+var pilot_waiting := false
+
 ## ---- 飞行计划原值：放行前要与"当前有效值"逐项对照（放行机制规范 §1.2）----
 var plan_origin := ""      # 计划起飞机场
 var plan_route := ""       # 计划航路
@@ -175,6 +185,10 @@ func to_dict() -> Dictionary:
 		"handoff_late": handoff_late,
 		"dep_info_notified": dep_info_notified.duplicate(),
 		"dep_info_skipped": dep_info_skipped,
+		"pilot_queries": pilot_queries,
+		"request_count": request_count,
+		"last_request_at": last_request_at,
+		"pilot_waiting": pilot_waiting,
 		"atis_notified": atis_notified,
 	}
 
@@ -243,6 +257,10 @@ static func from_dict(d: Dictionary) -> Flight:
 	var dn: Variant = d.get("dep_info_notified", [])
 	f.dep_info_notified = dn if dn is Array else []
 	f.dep_info_skipped = int(d.get("dep_info_skipped", 0))
+	f.pilot_queries = int(d.get("pilot_queries", 0))
+	f.request_count = int(d.get("request_count", 1))
+	f.last_request_at = float(d.get("last_request_at", 0.0))
+	f.pilot_waiting = bool(d.get("pilot_waiting", false))
 	return f
 
 

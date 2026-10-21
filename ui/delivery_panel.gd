@@ -1106,6 +1106,19 @@ func _flight_card(f: Flight) -> Control:
 			dly_text += "  延误 %d 分" % dly
 		col.add_child(_label(dly_text, 10, 500, dly_color))
 
+	# AI 驾驶舱状态（07 文档）：质疑过几次、机组是否已经不再呼叫
+	if f.pilot_queries > 0 or f.pilot_waiting or f.request_count > 1:
+		var ai_txt := ""
+		if f.pilot_waiting:
+			ai_txt = "机组等待中（已呼叫 %d 次）" % f.request_count
+		elif f.pilot_queries > 0:
+			ai_txt = "机组质疑 %d 次 · 已呼叫 %d 次" % [
+				f.pilot_queries, f.request_count]
+		else:
+			ai_txt = "已呼叫 %d 次" % f.request_count
+		col.add_child(_label(ai_txt, 10, 700,
+			AtcTheme.C_DANGER if f.pilot_waiting else AtcTheme.C_WARM))
+
 	# CDM 时隙（规范 §2.2）：四个时间只读显示，CTOT 单独标色
 	if f.eobt_min >= 0:
 		var tline := "EOBT %s · TOBT %s" % [
@@ -1607,27 +1620,31 @@ func _refresh_dep_info(f: Flight) -> void:
 		_dep_grid.add_child(cb)
 
 
-func _on_issue_preset() -> void:
-	if desk == null or _selected == "":
-		return
-	var r := desk.issue_preset(_selected, now)
+## 发出许可后的统一处理：被机组质疑要显眼地提示，而不是当成成功
+func _handle_issue_result(r: Dictionary) -> void:
 	if not bool(r.ok):
 		_hint.text = String(r.error)
 		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 		return
 	refresh()
+	if bool(r.get("queried", false)):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_WARM)
+
+
+func _on_issue_preset() -> void:
+	if desk == null or _selected == "":
+		return
+	_handle_issue_result(desk.issue_preset(_selected, now))
 
 
 func _on_issue_text() -> void:
 	if desk == null or _selected == "":
 		return
 	var r := desk.issue_free_text(_selected, _text_edit.text, now)
-	if not bool(r.ok):
-		_hint.text = String(r.error)
-		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
-		return
-	_text_edit.text = ""
-	refresh()
+	if bool(r.ok):
+		_text_edit.text = ""
+	_handle_issue_result(r)
 
 
 func _on_notify_all_dep() -> void:
@@ -1661,11 +1678,7 @@ func _on_issue() -> void:
 	var alt: int = DeliveryDesk.ALT_OPTIONS[_alt_opt.selected]
 	var sq := _squawk_edit.text
 	var r := desk.issue_clearance(_selected, sid, alt, sq, now)
-	if not r.ok:
-		_hint.text = String(r.error)
-		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
-		return
-	refresh()
+	_handle_issue_result(r)
 
 
 func _on_accept() -> void:

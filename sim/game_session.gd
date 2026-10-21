@@ -118,6 +118,7 @@ func apply_airport(data: Dictionary, seed_plan: bool = true) -> void:
 	delivery.enable_atis_lifecycle = true
 	delivery.enable_handoff_check = true
 	delivery.enable_dep_info = true
+	delivery.pilot_check_enabled = true
 	if delivery.difficulty == "":
 		delivery.difficulty = "normal"
 	if not seed_plan:

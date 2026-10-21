@@ -128,6 +128,15 @@ var _tidy_at := -1.0
 ## 通播发布时选错值的次数（进评分）
 var atis_err_count := 0
 
+## ---- AI 驾驶舱（07 文档）----
+## 是否让机组对许可做完整性检查并质疑（默认关闭，让老测试照旧）
+var pilot_check_enabled := false
+## 连续质疑上限：到这个次数后机组就接受现有内容（规范 §4.4，避免死循环）
+const MAX_PILOT_QUERIES := 2
+## 没人理时多久重新呼叫一次（规范 §4.3：60 秒，最多 3 次）
+const REQUEST_INTERVAL := 60.0
+const MAX_REQUESTS := 3
+
 ## ---- 许可发布模式（规范 §5.1）----
 ## "preset" 预设一键 / "form" 填空式 / "text" 自由文本
 var issue_mode := "form"
@@ -217,6 +226,8 @@ func spawn_request(sim_time: float, callsign: String = "") -> Flight:
 
 	f.state = Flight.State.PENDING
 	f.request_time = sim_time
+	f.last_request_at = sim_time
+	f.request_count = 1
 	_assign_slot(f, sim_time)
 	flights.append(f)
 
@@ -535,6 +546,69 @@ static func _grade(total: int) -> String:
 	if total >= 1:
 		return "B"
 	return "C"
+
+
+# ---------------------------------------------------------------- AI 驾驶舱（07 文档）
+
+## 机组对许可做完整性检查（规范 §4.4）。返回质疑内容列表，空表示接受。
+## 只有"必质疑"的几类：编码被占用、高度不可用、离场程序不兼容、缺修正海压。
+func pilot_check(f: Flight, sid: String, alt_m: int, squawk: String) -> Array:
+	var out: Array = []
+	var owner := squawk_owner(squawk, f.callsign)
+	if owner != "":
+		out.append("应答机编码 %s 已被占用，请重新指定" % squawk)
+	var band := PlanReview.loa_band(review_ref, sid)
+	if not band.is_empty():
+		var lo := int(band.get("alt_min", 0))
+		var hi := int(band.get("alt_max", 0))
+		if alt_m < lo or alt_m > hi:
+			out.append("高度 %d 米不可用，请指定其他高度（%d–%d 米）"
+				% [alt_m, lo, hi])
+	if not SID_ROUTES.has(sid):
+		out.append("不能执行该离场程序，请确认离场程序与计划航路")
+	if int(field.get("qnh", 0)) <= 0:
+		out.append("缺少高度表拨正值，请提供 QNH")
+	return out
+
+
+## 没人理时机组会再叫两遍；三遍之后转"机组等待中"（规范 §4.3）。
+func _tick_pilot_requery(sim_time: float) -> void:
+	if not pilot_check_enabled:
+		return
+	for f in flights:
+		var fl := f as Flight
+		if fl.state != Flight.State.PENDING or fl.pilot_waiting:
+			continue
+		if fl.request_count >= MAX_REQUESTS:
+			fl.pilot_waiting = true
+			_log(sim_time, "system", "%s 机组等待中（已呼叫 %d 次）。"
+				% [fl.callsign, fl.request_count])
+			continue
+		if sim_time - fl.last_request_at < REQUEST_INTERVAL:
+			continue
+		fl.request_count += 1
+		fl.last_request_at = sim_time
+		_log(sim_time, "pilot", "%s 再次呼叫放行，申请放行至 %s。" % [
+			fl.callsign, fl.destination])
+
+
+## 按难度决定这一轮机组读错的概率（规范 §4.6）：0% / 30% / 60%，
+## 每纠正一次概率减半，连续纠正两次后不再读错。
+func readback_error_rate(f: Flight) -> float:
+	if difficulty == "easy":
+		return 0.0
+	var base := 0.60 if difficulty == "hard" else 0.30
+	var n := mini(f.reissue_count, 2)
+	if n >= 2:
+		return 0.0
+	return base * pow(0.5, float(n))
+
+
+## 一次复诵里最多注入几处错误（规范 §4.6：简易 0 / 进阶 1 / 高阶 2）
+func max_readback_errors() -> int:
+	if difficulty == "easy":
+		return 0
+	return 2 if difficulty == "hard" else 1
 
 
 ## 该项是否正在协调中（界面显示「协调中…」）
@@ -1193,7 +1267,7 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 	if enable_atis_lifecycle and not atis_gate_ok(f):
 		return {"ok": false, "error":
 			"通播 %s 已过期，请先「通知最新通播」或「逐项通报变化」" % atis.alpha}
-	if enable_value_check:
+	if enable_value_check and not pilot_check_enabled:
 		var dup := squawk_owner(squawk, callsign)
 		if dup != "":
 			return {"ok": false, "error": "应答机 %s 已被 %s 占用，请重新指定" % [
@@ -1233,6 +1307,24 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 	f.readback_text = ""
 	f.readback_ok = true
 	f.readback_diff = ""
+
+	# 机组对许可做完整性检查（规范 §4.4）：有问题就质疑，不改状态、不进入复诵。
+	# 连续质疑到上限后机组接受现有内容，避免死循环。
+	if pilot_check_enabled:
+		var queries := pilot_check(f, f.sid, f.initial_alt_m, f.squawk)
+		if not queries.is_empty() and f.pilot_queries < MAX_PILOT_QUERIES:
+			f.pilot_queries += 1
+			f.state = Flight.State.PENDING
+			f.t_sent = -1.0
+			f.readback_at = 0.0
+			_log(sim_time, "atc", full_clearance_text(f))
+			_log(sim_time, "pilot", "%s，%s" % [f.callsign, queries[0]])
+			return {"ok": true, "queried": true,
+				"error": "机组质疑：" + String(queries[0])}
+		elif not queries.is_empty():
+			_log(sim_time, "system",
+				"%s 已连续质疑 %d 次，机组按现有内容接受。" % [
+					f.callsign, f.pilot_queries])
 
 	_eval_slot(f, sim_time)
 	if enable_dep_info:
@@ -1330,6 +1422,7 @@ func tick(sim_time: float) -> void:
 	_tick_coordination(sim_time)
 	_tick_atis(sim_time)
 	_tick_readback_deadline(sim_time)
+	_tick_pilot_requery(sim_time)
 	for f in flights:
 		if f.state != Flight.State.SENT:
 			continue
@@ -1411,33 +1504,39 @@ static func readback_text_of(callsign: String, limit: String, sid: String,
 
 
 func _generate_readback(f: Flight, sim_time: float) -> void:
-	var wrong := false
-	if force_ok_next:
-		# 教学关/测试用：强制这一轮机组读对
-		force_ok_next = false
-		wrong = false
-	elif force_error_next:
-		wrong = true
-		force_error_next = false
-	else:
-		wrong = rng.randf() < ERROR_RATE
-
 	var limit := f.clearance_limit if f.clearance_limit != "" else f.destination
 	# 机组报出来的值（可能读错）；文本与逐项表用同一份，避免"念一套、比一套"
 	var sid := f.sid
 	var route := f.route
 	var alt := f.initial_alt_m
 	var squawk := f.squawk
-	var diff := ""
+	var diffs := PackedStringArray()
 
-	if wrong:
-		var kind := rng.randi_range(0, ERR_KINDS - 1)
+	var want := 0
+	if force_ok_next:
+		# 教学关/测试用：强制这一轮机组读对
+		force_ok_next = false
+		want = 0
+	elif force_error_next:
+		force_error_next = false
+		want = maxi(1, max_readback_errors())
+	elif rng.randf() < readback_error_rate(f):
+		want = max_readback_errors()
+	want = mini(want, max_readback_errors())
+
+	var kinds := [0, 1, 2, 3]
+	for _i in range(want):
+		if kinds.is_empty():
+			break
+		var pick := rng.randi_range(0, kinds.size() - 1)
+		var kind: int = kinds[pick]
+		kinds.remove_at(pick)
 		if kind == 0:
 			squawk = _corrupt_digit(f.squawk)
-			diff = "应答机读成 %s，应为 %s" % [squawk, f.squawk]
+			diffs.append("应答机读成 %s，应为 %s" % [squawk, f.squawk])
 		elif kind == 1:
 			alt = f.initial_alt_m + 1000
-			diff = "初始高度读成 %d 米，应为 %d 米" % [alt, f.initial_alt_m]
+			diffs.append("初始高度读成 %d 米，应为 %d 米" % [alt, f.initial_alt_m])
 		elif kind == 2:
 			var bad_sid := SIDS[0]
 			for s in SIDS:
@@ -1446,17 +1545,17 @@ func _generate_readback(f: Flight, sim_time: float) -> void:
 					break
 			sid = bad_sid
 			route = str(SID_ROUTES.get(bad_sid, ""))
-			diff = "离场程序读成 %s，应为 %s" % [bad_sid, f.sid]
+			diffs.append("离场程序读成 %s，应为 %s" % [bad_sid, f.sid])
 		else:
 			# 航路读错：真实里最常见的错误之一，只校验 SID 是抓不到的
 			route = "A461 RUMUK" if f.route != "A461 RUMUK" else "W105 LADIX"
-			diff = "航路读成 %s，应为 %s" % [route, f.route]
+			diffs.append("航路读成 %s，应为 %s" % [route, f.route])
 
 	var text := DeliveryDesk.readback_text_of(f.callsign, limit, sid, route, alt, squawk)
 	f.readback_text = text
 	f.readback_items = _readback_items(f, sid, route, alt, squawk)
 	f.readback_ok = not _has_critical_mismatch(f.readback_items)
-	f.readback_diff = diff
+	f.readback_diff = "；".join(diffs)
 	f.readback_marks = {}
 	f.state = Flight.State.READBACK
 	f.t_readback = sim_time
