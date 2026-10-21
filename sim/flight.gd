@@ -74,6 +74,22 @@ var review_done := false
 ## 高阶模式下带着漏检完成审查的次数（进运行品质评分）
 var missed_review := 0
 
+## ---- CDM 时隙（放行机制规范 §2）----
+## 全部是"当天第几分钟"，-1 表示还没算过
+var eobt_min := -1        # 预计撤轮挡：来自飞行计划
+var tobt_min := -1        # 目标撤轮挡：承运人/地面服务给出
+var ctot_min := -1        # 计算起飞时间：受流量限制才有
+var cobt_min := -1        # 计算撤轮挡：由 CTOT 反推
+var ctot_restricted := false
+## 手动排序：0 起；-1 表示没被玩家拖过，按计划时刻排
+var order_rank := -1
+## 放行时刻相对时隙的结果："提前" / "准时" / "延误" / ""
+var slot_eval := ""
+var slot_delay_min := 0
+
+## 修正海压是否由管制员确认过（第二百九十四条：QNH 不可因 ATIS 而豁免）
+var qnh_confirmed := false
+
 ## 统计
 var reissue_count := 0
 
@@ -118,6 +134,15 @@ func to_dict() -> Dictionary:
 		"review": review.duplicate(),
 		"review_done": review_done,
 		"missed_review": missed_review,
+		"eobt_min": eobt_min,
+		"tobt_min": tobt_min,
+		"ctot_min": ctot_min,
+		"cobt_min": cobt_min,
+		"ctot_restricted": ctot_restricted,
+		"order_rank": order_rank,
+		"slot_eval": slot_eval,
+		"slot_delay_min": slot_delay_min,
+		"qnh_confirmed": qnh_confirmed,
 	}
 
 
@@ -162,6 +187,15 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.review = rv if rv is Dictionary else {}
 	f.review_done = bool(d.get("review_done", false))
 	f.missed_review = int(d.get("missed_review", 0))
+	f.eobt_min = int(d.get("eobt_min", -1))
+	f.tobt_min = int(d.get("tobt_min", -1))
+	f.ctot_min = int(d.get("ctot_min", -1))
+	f.cobt_min = int(d.get("cobt_min", -1))
+	f.ctot_restricted = bool(d.get("ctot_restricted", false))
+	f.order_rank = int(d.get("order_rank", -1))
+	f.slot_eval = str(d.get("slot_eval", ""))
+	f.slot_delay_min = int(d.get("slot_delay_min", 0))
+	f.qnh_confirmed = bool(d.get("qnh_confirmed", false))
 	return f
 
 

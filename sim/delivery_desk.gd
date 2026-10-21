@@ -84,6 +84,20 @@ var review_ref := {}
 ## 难度："easy" / "normal" / "hard"（规范 §0.3）
 var difficulty := "normal"
 
+## CDM 时隙开关（规范 §2）。开启后每架航班有 EOBT/TOBT/CTOT/COBT，
+## 受流量限制的航班不能早于 CTOT 放行。默认关闭，让老测试照旧。
+var cdm_enabled := false
+## 由 CTOT 反推 COBT 用的地面滑行时间（分钟）
+const TAXI_MIN := 12
+## 受 CTOT 约束的航班比例
+const CTOT_RATE := 0.45
+
+## QNH 确认闸门（规范 §5.1 模式 B）：机组收到 ATIS 也不是省掉 QNH 的理由，
+## 管制员必须在许可里确认修正海压。默认关闭，让老测试照旧。
+var enable_qnh_gate := false
+## 数值校验（规范 §5.1 / §10）：应答机重复、高度不在协议带内
+var enable_value_check := false
+
 ## 进行中的「协调修改」：key 为 "呼号|字段"，value 为 {"ready_at": 秒}
 var _coord := {}
 
@@ -155,6 +169,7 @@ func spawn_request(sim_time: float, callsign: String = "") -> Flight:
 
 	f.state = Flight.State.PENDING
 	f.request_time = sim_time
+	_assign_slot(f, sim_time)
 	flights.append(f)
 
 	var alpha := str(field.get("atis_alpha", "A"))
@@ -440,20 +455,114 @@ func delay_minutes(f: Flight, sim_time: float) -> int:
 
 
 ## 放行顺序（第二百九十二条）：按计划起飞时刻先后；没有计划的排在最后。
+## 玩家拖过之后按手动顺序（order_rank），没拖过的仍按计划时刻排在后面。
 ## 同刻按呼号排，保证结果稳定、可测。
 func ordered_pending() -> Array:
 	var list := pending()
 	list.sort_custom(func(a: Flight, b: Flight) -> bool:
-		var ma := plan_minutes(a)
-		var mb := plan_minutes(b)
-		if ma < 0:
-			ma = 99999
-		if mb < 0:
-			mb = 99999
-		if ma != mb:
-			return ma < mb
+		var ra := a.order_rank if a.order_rank >= 0 else 10000 + _rank_key(a)
+		var rb := b.order_rank if b.order_rank >= 0 else 10000 + _rank_key(b)
+		if ra != rb:
+			return ra < rb
 		return a.callsign < b.callsign)
 	return list
+
+
+func _rank_key(f: Flight) -> int:
+	var m := plan_minutes(f)
+	return m if m >= 0 else 99999
+
+
+# ---------------------------------------------------------------- CDM 时隙（规范 §2）
+
+## 给一架航班算时隙。有计划的按计划时刻推，临时航班按当前时刻推。
+## 数值全部由种子决定，同一局结果可复现。
+func _assign_slot(f: Flight, sim_time: float) -> void:
+	if not cdm_enabled:
+		return
+	var base := 0
+	if f.planned_std != "":
+		base = Atis.minutes_since(f.planned_std, 0.0)
+	else:
+		base = now_minutes(sim_time)
+	f.eobt_min = base
+	# TOBT 是承运人/地面服务给的，比计划略有出入
+	f.tobt_min = base + rng.randi_range(-3, 8)
+	f.ctot_restricted = rng.randf() < CTOT_RATE
+	if f.ctot_restricted:
+		f.ctot_min = f.tobt_min + rng.randi_range(6, 22)
+		f.cobt_min = maxi(f.tobt_min - 2, f.ctot_min - TAXI_MIN)
+	else:
+		f.ctot_min = -1
+		f.cobt_min = maxi(0, f.tobt_min - 8)
+
+
+## 一天内分钟数 → "HHMM"（跨零点也正常）
+static func slot_hhmm(minute_of_day: int) -> String:
+	if minute_of_day < 0:
+		return "—"
+	var m := posmod(minute_of_day, 24 * 60)
+	return "%02d%02d" % [m / 60, m % 60]
+
+
+## 当前仿真时刻对应的一天内分钟数
+func now_minutes(sim_time: float) -> int:
+	return Atis.minutes_since(str(field.get("clock_start", "0000")), sim_time)
+
+
+## 能不能把某架拖到第 to_index 位（规范 §2.3）。
+## 受 CTOT 约束的航班不能排到"时隙更早的受限航班"前面 —— 那等于抢别人的时隙。
+func can_move(callsign: String, to_index: int) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	if f.state != Flight.State.PENDING:
+		return {"ok": false, "error": "%s 已进入放行流程，不能再调整顺序" % callsign}
+	var ordered := ordered_pending()
+	var cur := ordered.find(f)
+	if cur < 0:
+		return {"ok": false, "error": "%s 不在待放行列表里" % callsign}
+	var target := ordered.duplicate()
+	target.remove_at(cur)
+	target.insert(clampi(to_index, 0, target.size()), f)
+	# 受限航班之间的先后必须符合 CTOT 先后 —— 否则就是抢别人的时隙。
+	# 注意要检查**整份新列表**：只看被拖那一架前面是不够的，
+	# 把时隙晚的抽到最前、把时隙早的挤到后面，同样违反规则。
+	var last_ctot := -1
+	var last_call := ""
+	for e in target:
+		var o := e as Flight
+		if not (o.ctot_restricted and o.ctot_min >= 0):
+			continue
+		if last_ctot >= 0 and o.ctot_min < last_ctot:
+			return {"ok": false,
+				"error": "%s 受 CTOT %s 约束，不能排到 %s（CTOT %s）前面" % [
+					o.callsign, slot_hhmm(o.ctot_min), last_call,
+					slot_hhmm(last_ctot)]}
+		last_ctot = o.ctot_min
+		last_call = o.callsign
+	return {"ok": true, "error": ""}
+
+
+## 拖动进程单调整放行顺序（规范 §2.3）。被拒绝时返回原因，界面把卡片弹回原位。
+func move_flight(callsign: String, to_index: int) -> Dictionary:
+	var chk := can_move(callsign, to_index)
+	if not bool(chk.ok):
+		return chk
+	var f := get_flight(callsign)
+	var ordered := ordered_pending()
+	var cur := ordered.find(f)
+	ordered.remove_at(cur)
+	ordered.insert(clampi(to_index, 0, ordered.size()), f)
+	for i in range(ordered.size()):
+		(ordered[i] as Flight).order_rank = i
+	return {"ok": true, "error": ""}
+
+
+## 恢复按计划时刻排（「整理进程单」用）
+func reset_order() -> void:
+	for f in flights:
+		(f as Flight).order_rank = -1
 
 
 ## 预计延误超过 30 分钟必须通知机组（第二百九十三条）；每架只通知一次。
@@ -555,6 +664,30 @@ func _random_squawk() -> String:
 
 # ---------------------------------------------------------------- 发放许可
 
+## 该应答机当前被哪架航班占着（不含自己）。没人占用返回空串。
+## 规范 §5.1：同一空域同一时间要尽量减少编码重复，否则二次雷达识别会错。
+func squawk_owner(squawk: String, except_callsign: String = "") -> String:
+	for f in flights:
+		var fl := f as Flight
+		if fl.callsign == except_callsign:
+			continue
+		if fl.squawk != squawk:
+			continue
+		if fl.state == Flight.State.PENDING or fl.handed_off:
+			continue
+		return fl.callsign
+	return ""
+
+
+## 管制员确认修正海压（QNH）。确认后才能发放行许可。
+func confirm_qnh(callsign: String) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	f.qnh_confirmed = true
+	return {"ok": true, "error": ""}
+
+
 ## 校验应答机：必须 4 位、每位 0-7（八进制）。
 static func is_valid_squawk(s: String) -> bool:
 	if s.length() != 4:
@@ -582,8 +715,30 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 		return {"ok": false, "error": "初始高度必须大于 0"}
 	if not is_valid_squawk(squawk):
 		return {"ok": false, "error": "应答机必须是 4 位八进制数（0-7）"}
+	if enable_qnh_gate and not f.qnh_confirmed:
+		return {"ok": false, "error": "请先在许可表单里确认修正海压（QNH）"}
+	if enable_value_check:
+		var dup := squawk_owner(squawk, callsign)
+		if dup != "":
+			return {"ok": false, "error": "应答机 %s 已被 %s 占用，请重新指定" % [
+				squawk, dup]}
+		var band := PlanReview.loa_band(review_ref, sid)
+		if not band.is_empty():
+			var lo := int(band.get("alt_min", 0))
+			var hi := int(band.get("alt_max", 0))
+			if alt_m < lo or alt_m > hi:
+				return {"ok": false, "error":
+					"高度 %d 米不在 %s 的协议高度带 %d–%d 米内" % [alt_m, sid, lo, hi]}
 	if enable_strip_check and not f.checked:
 		return {"ok": false, "error": "请先核对 %s 的飞行计划（进程单）" % callsign}
+
+	# CTOT 闸门（规范 §2.3）：受流量限制的航班不能早于时隙放行
+	if cdm_enabled and f.ctot_restricted and f.ctot_min >= 0:
+		var now_m := now_minutes(sim_time)
+		if now_m < f.ctot_min:
+			return {"ok": false, "error": "%s 受 CTOT %s 约束，最早放行时间 %s（现在 %s）"
+				% [callsign, slot_hhmm(f.ctot_min), slot_hhmm(f.ctot_min),
+					slot_hhmm(now_m)]}
 
 	# 换了离场程序，航路也要跟着换——只给 SID 不给航路不符合第二百九十一条
 	var new_route := str(SID_ROUTES.get(sid, ""))
@@ -603,8 +758,32 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 	f.readback_ok = true
 	f.readback_diff = ""
 
+	_eval_slot(f, sim_time)
 	_log(sim_time, "atc", full_clearance_text(f))
 	return {"ok": true, "error": ""}
+
+
+## 放行时刻相对时隙的结果（规范 §2.4）：提前 / 准时 / 延误。
+## 不受 CTOT 约束的航班按 TOBT 衡量 —— 早于目标撤轮挡就是提前。
+func _eval_slot(f: Flight, sim_time: float) -> void:
+	var now_m := now_minutes(sim_time)
+	var anchor := -1
+	if f.ctot_restricted and f.ctot_min >= 0:
+		anchor = f.ctot_min
+	elif f.tobt_min >= 0:
+		anchor = f.tobt_min
+	if anchor < 0:
+		f.slot_eval = ""
+		f.slot_delay_min = 0
+		return
+	var d := now_m - anchor
+	f.slot_delay_min = d
+	if d <= -3:
+		f.slot_eval = "提前"
+	elif d <= 3:
+		f.slot_eval = "准时"
+	else:
+		f.slot_eval = "延误"
 
 
 ## 按《民用航空空中交通管理规则》第二百九十一条的七项要素拼放行许可：

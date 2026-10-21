@@ -144,6 +144,25 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 数据来源分离得比较干净：判定规则在 `sim/plan_review.gd`（零界面依赖，66 项断言），
 参照数据在 `data/airports/*.json` 的 `review_ref`，窗口只管显示。
 
+### CDM 时隙与放行顺序（机制规范 §2）
+
+每架航班带四个时间，进程单上只读显示：**EOBT**（来自计划）、**TOBT**（承运人/地面服务）、
+**CTOT**（受流量限制才有时隙，单独标色）、**COBT**（CTOT 反推的撤轮挡时刻，= CTOT − 12 分钟滑行）。
+
+- 演示机场里约 45% 的航班受 CTOT 约束（由随机种子决定，同一局可复现）。
+- **拖动进程单可调整放行顺序**：按住卡片拖动，松开按落点落位。
+- 受约束航班**不会被排到"时隙更早的受限航班"前面** —— 那等于抢别人的时隙。
+  被拒绝时卡片弹回，提示写清是谁的时隙挡着。
+- **早于 CTOT 不许放行**：复核 时会直接返回"受 CTOT 0842 约束，最早放行时间 0842（现在 0815）"。
+- 放行时刻会相对时隙记一个结果：**提前 / 准时 / 延误**（±3 分钟内算准时），进评分。
+
+### 许可闸门与数值校验（机制规范 §5.1 / §10）
+
+- **QNH 必须由管制员确认**：机组报告已抄收 ATIS 也不是省掉高度表拨正值的理由，
+  许可编辑器里有「确认 QNH」按钮，没确认时发放行许可按钮置灰。
+- **应答机重复**：与空域里另一架（已发许可且未移交）重复时拒绝发放，并点名占用者。
+- **高度必须在 SID 的协议高度带内**：超出拒绝，提示里给出上下限。
+
 ### 放行席状态机（机制规范 §0.2）
 
 ```
@@ -339,6 +358,12 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # 窗口设置（显示模式/尺寸/显示器/配置损坏兜底）：37 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_window.gd
 
+# CDM 时隙 / 拖动排序：42 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_cdm.gd
+
+# 许可闸门/数值校验：20 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_guard.gd
+
 # 飞行计划审查 / 七态状态机：66 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_plan_review.gd
 
@@ -351,7 +376,7 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 
 ## 当前状态
 
-v0.1.1
+v0.1.2
 
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
@@ -379,7 +404,7 @@ main       最新版本（持续开发）
 v0.0.1     已固定，不再改动
 v0.0.2     已固定，不再改动
 v0.1.0     已固定，不再改动
-v0.1.1     已固定，不再改动
+v0.1.2     已固定，不再改动
 ```
 
 版本号只有一个来源：`core/version.gd` 里的 `MAJOR / MINOR / PATCH`。

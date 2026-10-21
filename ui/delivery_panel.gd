@@ -29,6 +29,8 @@ var _editor: PanelContainer
 var _sid_opt: OptionButton
 var _alt_opt: OptionButton
 var _squawk_edit: LineEdit
+var _qnh_value: Label
+var _qnh_btn: Button
 var _limit_label: Label
 var _route_label: Label
 var _preview: Label
@@ -106,6 +108,13 @@ var _radio_visible := true
 var _drag_target := ""
 var _drag_bar: ColorRect
 var _drag_bar_normal := Color(1, 1, 1, 0.16)
+
+## 拖动进程单调整放行顺序（规范 §2.3）
+var _card_press := ""
+var _card_press_pos := Vector2.ZERO
+var _dragging_card := ""
+## 与 ordered_pending() 同序的卡片节点，落位时用来算目标下标
+var _card_nodes: Array = []
 
 const LIM_LEFT := Vector2(190.0, 560.0)
 const LIM_RIGHT := Vector2(300.0, 720.0)
@@ -200,6 +209,27 @@ func _on_handle_input(ev: InputEvent, kind: String, bar: ColorRect) -> void:
 ## 拖动期间的鼠标移动必须由面板整体接收：鼠标一旦离开分隔条本身，
 ## 分隔条就收不到 motion 事件了，这是拖拽最容易写坏的地方。
 func _input(event: InputEvent) -> void:
+	# 进程单拖动
+	if _card_press != "":
+		if event is InputEventMouseMotion:
+			var gp := get_global_mouse_position()
+			if _dragging_card == "" and gp.distance_to(_card_press_pos) > 14.0:
+				_dragging_card = _card_press
+				_hint.text = "拖动中…松开鼠标按当前位置落位"
+				_hint.add_theme_color_override("font_color", AtcTheme.C_WARM)
+			if _dragging_card != "":
+				accept_event()
+		elif event is InputEventMouseButton:
+			var mb2 := event as InputEventMouseButton
+			if mb2.button_index == MOUSE_BUTTON_LEFT and not mb2.pressed:
+				var dragged := _dragging_card
+				_card_press = ""
+				_dragging_card = ""
+				if dragged != "":
+					_drop_card(dragged, get_global_mouse_position())
+					accept_event()
+		return
+
 	if _drag_target == "":
 		return
 	if event is InputEventMouseMotion:
@@ -217,6 +247,28 @@ func _end_drag() -> void:
 	if _drag_bar != null:
 		_drag_bar.color = _drag_bar_normal
 	_drag_bar = null
+
+
+## 松开鼠标时按落点决定插到第几位（规范 §2.3）。
+## 被拒绝（抢别人时隙）时卡片原地不动，只在提示区说明原因。
+func _drop_card(callsign: String, pos: Vector2) -> void:
+	var idx := 0
+	for e in _card_nodes:
+		var c: Variant = (e as Dictionary).get("ctrl")
+		if c == null or not is_instance_valid(c):
+			continue
+		if pos.y > (c as Control).get_global_rect().get_center().y:
+			idx += 1
+	if desk == null:
+		return
+	var r := desk.move_flight(callsign, idx)
+	refresh()
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+	else:
+		_hint.text = "放行顺序已调整"
+		_hint.add_theme_color_override("font_color", AtcTheme.C_ACCENT)
 
 
 func _apply_drag(pos: Vector2) -> void:
@@ -417,6 +469,20 @@ func _build_editor(parent: HBoxContainer) -> void:
 		_alt_opt.add_item("%d 米" % a)
 	_alt_opt.item_selected.connect(func(_i: int) -> void: _update_preview())
 	egrid.add_child(_field_row("初始高度", _alt_opt))
+
+	# 修正海压：机组抄收了 ATIS 也不能省 —— 必须由管制员在许可里确认
+	# （《民用航空空中交通管理规则》第二百九十四条）
+	_qnh_value = _label("—", 15, 700, AtcTheme.C_TEXT)
+	_qnh_btn = _action_button("确认 QNH", AtcTheme.C_WARM)
+	_qnh_btn.custom_minimum_size = Vector2(112.0 * AtcTheme.UI_SCALE,
+		30.0 * AtcTheme.UI_SCALE)
+	_qnh_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_qnh_btn.pressed.connect(_on_confirm_qnh)
+	var qh := HBoxContainer.new()
+	qh.add_theme_constant_override("separation", 10)
+	qh.add_child(_qnh_value)
+	qh.add_child(_qnh_btn)
+	egrid.add_child(_field_row("修正海压", qh))
 
 	_squawk_edit = LineEdit.new()
 	_squawk_edit.max_length = 4
@@ -783,6 +849,7 @@ func refresh() -> void:
 func _refresh_list() -> void:
 	for c in _pending_box.get_children():
 		c.queue_free()
+	_card_nodes.clear()
 
 	# 按计划起飞时刻排（第二百九十二条），而不是按来的先后
 	var pend := desk.ordered_pending()
@@ -803,7 +870,9 @@ func _refresh_list() -> void:
 		return
 
 	for f in pend:
-		_pending_box.add_child(_flight_card(f))
+		var card := _flight_card(f)
+		_pending_box.add_child(card)
+		_card_nodes.append({"callsign": (f as Flight).callsign, "ctrl": card})
 
 	if not waiting.is_empty():
 		_pending_box.add_child(_label("待移交地面  %d" % waiting.size(),
@@ -832,7 +901,11 @@ func _flight_card(f: Flight) -> Control:
 	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	card.gui_input.connect(func(ev: InputEvent) -> void:
 		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-			_select(f.callsign))
+			_select(f.callsign)
+			# 记下按下点：移动超过阈值才算拖动，否则只当点击选中
+			_card_press = f.callsign
+			_card_press_pos = get_global_mouse_position()
+			_dragging_card = "")
 
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 2)
@@ -872,6 +945,23 @@ func _flight_card(f: Flight) -> Control:
 			dly_color = AtcTheme.C_WARM
 			dly_text += "  延误 %d 分" % dly
 		col.add_child(_label(dly_text, 10, 500, dly_color))
+
+	# CDM 时隙（规范 §2.2）：四个时间只读显示，CTOT 单独标色
+	if f.eobt_min >= 0:
+		var tline := "EOBT %s · TOBT %s" % [
+			DeliveryDesk.slot_hhmm(f.eobt_min), DeliveryDesk.slot_hhmm(f.tobt_min)]
+		col.add_child(_label(tline, 10, 400, AtcTheme.C_TEXT_FAINT))
+		if f.ctot_restricted and f.ctot_min >= 0:
+			col.add_child(_label("CTOT %s · COBT %s" % [
+				DeliveryDesk.slot_hhmm(f.ctot_min),
+				DeliveryDesk.slot_hhmm(f.cobt_min)], 10, 700, AtcTheme.C_WARM))
+		if f.slot_eval != "":
+			var ec := AtcTheme.C_ACCENT
+			if f.slot_eval == "提前":
+				ec = AtcTheme.C_WARM
+			elif f.slot_eval == "延误":
+				ec = AtcTheme.C_DANGER
+			col.add_child(_label("放行 %s" % f.slot_eval, 10, 700, ec))
 
 	# 未核对计划时，进程单上直接给出核对入口
 	if desk != null and desk.enable_strip_check and not f.checked \
@@ -980,13 +1070,19 @@ func _refresh_detail() -> void:
 
 	var can_issue: bool = f.state == Flight.State.PENDING
 	var need_check: bool = desk.enable_strip_check and not f.checked
+	var need_qnh: bool = desk.enable_qnh_gate and not f.qnh_confirmed
+	var qnh_v := int(desk.field.get("qnh", 0))
+	_qnh_value.text = "%d hPa" % qnh_v if qnh_v > 0 else "—"
+	_qnh_btn.visible = desk.enable_qnh_gate
+	_qnh_btn.disabled = f.qnh_confirmed or not can_issue
+	_qnh_btn.text = "已确认" if f.qnh_confirmed else "确认 QNH"
 	_sid_opt.disabled = not can_issue
 	_alt_opt.disabled = not can_issue
 	_squawk_edit.editable = can_issue
 
 	if can_issue:
 		_issue_btn.text = "发放行许可"
-		_issue_btn.disabled = need_check
+		_issue_btn.disabled = need_check or need_qnh
 	elif f.state == Flight.State.CLEARED and not f.handed_off:
 		_issue_btn.text = "移交给地面席"
 		_issue_btn.disabled = false
@@ -1000,6 +1096,9 @@ func _refresh_detail() -> void:
 	if f.state == Flight.State.PENDING:
 		if need_check:
 			_hint.text = "先在进程单上核对飞行计划"
+			_hint.add_theme_color_override("font_color", AtcTheme.C_WARM)
+		elif need_qnh:
+			_hint.text = "先确认修正海压 QNH 才能发许可"
 			_hint.add_theme_color_override("font_color", AtcTheme.C_WARM)
 		else:
 			_hint.text = "计划已核对，可以发放行许可"
@@ -1077,6 +1176,17 @@ func _on_squawk_changed(t: String) -> void:
 	if clean != t:
 		_squawk_edit.text = clean
 		_squawk_edit.caret_column = clean.length()
+
+
+func _on_confirm_qnh() -> void:
+	if desk == null or _selected == "":
+		return
+	var r := desk.confirm_qnh(_selected)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	refresh()
 
 
 func _on_issue() -> void:
