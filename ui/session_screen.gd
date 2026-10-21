@@ -29,6 +29,7 @@ var _mode_badge: Label
 var _seat_label: Label
 var _clock: Label
 var _options_btn: Button
+var _window_menu: WindowMenu
 
 var _flight_box: VBoxContainer
 var _save_screen: SaveScreen
@@ -152,6 +153,10 @@ func _build_top_bar() -> void:
 	_clock.add_theme_color_override("font_color", AtcTheme.C_TEXT)
 	_clock.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hb.add_child(_clock)
+
+	# 窗口按钮：显示模式 / 尺寸 / 置顶 / 最小化（设置会被记住）
+	_window_menu = WindowMenu.new()
+	hb.add_child(_window_menu)
 
 	_options_btn = _bar_button("选项", Callable(), 120.0)
 	_options_btn.pressed.connect(_on_options_pressed)

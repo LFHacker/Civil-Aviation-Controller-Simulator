@@ -42,6 +42,9 @@ var _pending_load_save: SaveGame = null
 
 
 func _ready() -> void:
+	# 先套用上次保存的窗口设置（显示模式/尺寸/置顶），再建界面
+	WindowSettings.apply(WindowSettings.load_settings())
+
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with(SHOT_ARG):
 			_shot_path = arg.substr(SHOT_ARG.length())

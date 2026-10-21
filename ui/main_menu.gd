@@ -28,6 +28,7 @@ var _seat_picker: SeatPicker
 var _fade: ColorRect
 var _toast_box: PanelContainer
 var _toast: Label
+var _window_menu: WindowMenu
 var _toast_tween: Tween
 var _idx := 0
 var _leaving := false
@@ -228,7 +229,20 @@ func _build_footer() -> void:
 	bar.add_child(_footer_label("● 系统待机",
 		0.34, 0.66, HORIZONTAL_ALIGNMENT_CENTER, AtcTheme.C_ACCENT_DIM))
 	bar.add_child(_footer_label("GODOT 4.7.2  ·  FORWARD+",
-		0.5, 1.0, HORIZONTAL_ALIGNMENT_RIGHT, AtcTheme.C_TEXT_FAINT))
+		0.5, 0.87, HORIZONTAL_ALIGNMENT_RIGHT, AtcTheme.C_TEXT_FAINT))
+
+	# 窗口按钮：主菜单里也能改显示模式 / 尺寸（和游戏内共用同一份设置）
+	_window_menu = WindowMenu.new()
+	_window_menu.name = "WindowMenu"
+	_window_menu.anchor_left = 1.0
+	_window_menu.anchor_right = 1.0
+	_window_menu.anchor_top = 0.0
+	_window_menu.anchor_bottom = 1.0
+	_window_menu.offset_left = -126.0 * AtcTheme.UI_SCALE
+	_window_menu.offset_right = 0.0
+	_window_menu.offset_top = 2.0
+	_window_menu.offset_bottom = -2.0
+	bar.add_child(_window_menu)
 
 
 func _footer_label(text: String, l: float, r: float, align: int, color: Color) -> Label:
