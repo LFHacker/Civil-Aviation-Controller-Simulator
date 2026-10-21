@@ -29,6 +29,7 @@ var _mode_badge: Label
 var _seat_label: Label
 var _clock: Label
 var _options_btn: Button
+var _view_menu: ViewMenu
 var _window_menu: WindowMenu
 
 var _flight_box: VBoxContainer
@@ -119,15 +120,13 @@ func _build_top_bar() -> void:
 	hb.add_theme_constant_override("separation", 18)
 	stage.add_child(hb)
 
-	# 信息标签栏的挂载点：CenterContainer 自动把子控件放在顶栏正中央，
-	# 不用手动算宽度（手动算踩过坑：首次布局最小宽度还是 0）。
-	# 直接把标签栏容器交给 CenterContainer：它会按子控件的最小尺寸居中，
-	# 所以挂载点本身必须是个 Container（普通 Control 不会向上传递最小尺寸）。
+	# 信息标签栏的挂载点：直接放进顶栏 HBox 里当"中间那一格"，
+	# 由 CenterContainer 在**剩余空间**里居中 —— 既不用手算宽度（手算踩过坑：
+	# 首次布局时最小宽度还是 0），也不会和左右两组重叠（叠加定位就会压到时钟上）。
 	_top_tabs_host = CenterContainer.new()
 	_top_tabs_host.name = "TopTabsCenter"
-	_top_tabs_host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_top_tabs_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stage.add_child(_top_tabs_host)
+	_top_tabs_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	_mode_badge = Label.new()
 	_mode_badge.add_theme_font_override("font", AtcTheme.font(700))
@@ -143,9 +142,8 @@ func _build_top_bar() -> void:
 	_seat_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hb.add_child(_seat_label)
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hb.add_child(spacer)
+	# 标签栏吃掉左组与右组之间的全部空隙，自己内部居中
+	hb.add_child(_top_tabs_host)
 
 	_clock = Label.new()
 	_clock.add_theme_font_override("font", AtcTheme.font(700))
@@ -153,6 +151,12 @@ func _build_top_bar() -> void:
 	_clock.add_theme_color_override("font_color", AtcTheme.C_TEXT)
 	_clock.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hb.add_child(_clock)
+
+	# 视图按钮：开关界面面板（进程单/场面监视/许可证编辑器/通话记录…）+ 布局预设
+	_view_menu = ViewMenu.new()
+	_view_menu.state_changed.connect(_apply_view)
+	_view_menu.layout_reset.connect(_on_layout_reset)
+	hb.add_child(_view_menu)
 
 	# 窗口按钮：显示模式 / 尺寸 / 置顶 / 最小化（设置会被记住）
 	_window_menu = WindowMenu.new()
@@ -478,6 +482,35 @@ func _setup_seat_panel() -> void:
 			panel.mount_top_tabs(_top_tabs_host)
 	else:
 		_placeholder_box.visible = true
+
+	# 面板显隐跟着设置走：换席位、重开一局都沿用玩家上次的布局
+	_apply_view(ViewState.load_settings())
+
+
+## 把视图状态套到界面上。逻辑在 core/view_state.gd，这里只负责改 visible。
+func _apply_view(d: Dictionary) -> void:
+	if _seat_panel != null and _seat_panel.has_method("set_panel_visible"):
+		for id in ["strip", "center", "editor", "radio"]:
+			_seat_panel.call("set_panel_visible", String(id), bool(d.get(id, true)))
+	var seat_on := bool(d.get("seat", true))
+	if _mode_badge != null:
+		_mode_badge.visible = seat_on
+	if _seat_label != null:
+		_seat_label.visible = seat_on
+	if _clock != null:
+		_clock.visible = bool(d.get("clock", true))
+	# 标签栏只隐藏里面的标签条，挂载点本身留在顶栏里占位 ——
+	# 否则整条顶栏会突然往左塌，时钟和按钮全跳位置。
+	if _top_tabs_host != null:
+		for c in _top_tabs_host.get_children():
+			if c is Control:
+				(c as Control).visible = bool(d.get("tabs", true))
+
+
+## 换布局时把分栏宽度也恢复默认，否则"标准席位"会带着上一次拖窄的列宽
+func _on_layout_reset() -> void:
+	if _seat_panel != null and _seat_panel.has_method("reset_splits"):
+		_seat_panel.call("reset_splits")
 
 
 ## 让顶栏中央的标签栏在整条顶栏里真正居中（而不是在左右两组的空隙里居中）。

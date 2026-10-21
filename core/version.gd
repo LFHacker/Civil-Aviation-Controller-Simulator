@@ -3,10 +3,10 @@ class_name AtcVersion
 extends RefCounted
 
 const MAJOR := 0
-const MINOR := 0
-const PATCH := 2
+const MINOR := 1
+const PATCH := 0
 
-const CODENAME := "skyline"
+const CODENAME := "radar"
 
 
 ## 形如 "0.0.1"

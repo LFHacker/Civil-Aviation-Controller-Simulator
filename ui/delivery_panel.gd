@@ -78,6 +78,8 @@ func _build() -> void:
 	root.add_child(_make_handle("bottom"))
 	_build_transcript(root)
 
+	_apply_pane_visibility()
+
 
 
 # ---------------------------------------------------------------- 可拖拽分栏
@@ -88,8 +90,15 @@ var _right_w := 420.0 * AtcTheme.UI_SCALE
 var _bottom_h := 132.0 * AtcTheme.UI_SCALE
 
 var _left_pane: Control
+var _center_pane: Control
 var _right_pane: Control
 var _bottom_pane: Control
+
+## 面板显隐（由「视图」菜单驱动）。分栏尺寸不变，重新打开还是原来的宽度。
+var _strip_visible := true
+var _center_visible := true
+var _editor_visible := true
+var _radio_visible := true
 
 ## 正在拖的分隔条："" / "left" / "right" / "bottom"
 var _drag_target := ""
@@ -242,6 +251,66 @@ func _reset_split(kind: String) -> void:
 			_bottom_pane.custom_minimum_size.y = _bottom_h
 
 
+## 三处分隔条一起恢复默认（「视图 → 恢复默认布局」用）
+func reset_splits() -> void:
+	for k in ["left", "right", "bottom"]:
+		_reset_split(String(k))
+
+
+# ---------------------------------------------------------------- 面板显隐（视图菜单）
+
+## 开关本席位内部的面板：strip 左进程单 / center 中间主视区 /
+## editor 右许可编辑器 / radio 底部通话记录。
+func set_panel_visible(id: String, on: bool) -> void:
+	if id == "strip":
+		_strip_visible = on
+	elif id == "center":
+		_center_visible = on
+	elif id == "editor":
+		_editor_visible = on
+	elif id == "radio":
+		_radio_visible = on
+	else:
+		return
+	_apply_pane_visibility()
+
+
+func _apply_pane_visibility() -> void:
+	if _left_pane != null:
+		_left_pane.visible = _strip_visible
+	if _center_pane != null:
+		_center_pane.visible = _center_visible
+	if _right_pane != null:
+		_right_pane.visible = _editor_visible
+	if _bottom_pane != null:
+		_bottom_pane.visible = _radio_visible
+
+	# 分隔条只在"它两边都看得见"的时候才有意义
+	_show_handle("left", _strip_visible and _center_visible)
+	_show_handle("right", _editor_visible and _center_visible)
+	_show_handle("bottom", _radio_visible
+		and (_center_visible or _strip_visible or _editor_visible))
+
+	# 宽度分配规则要确定：中间开着就中间吃满；中间关了就让右边吃满；
+	# 右边也关了就让左边吃满。否则隐藏中间会留下一条空白。
+	var center_on := _center_visible
+	var right_on := _editor_visible
+	if _center_pane != null:
+		_center_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if _right_pane != null:
+		_right_pane.size_flags_horizontal = Control.SIZE_FILL if center_on \
+			else Control.SIZE_EXPAND_FILL
+	if _left_pane != null:
+		_left_pane.size_flags_horizontal = Control.SIZE_FILL if (center_on or right_on) \
+			else Control.SIZE_EXPAND_FILL
+
+
+func _show_handle(kind: String, on: bool) -> void:
+	var h: Variant = _handles.get(kind)
+	if h != null and is_instance_valid(h):
+		(h as Control).visible = on
+
+
 func _build_strips(parent: HBoxContainer) -> void:
 	var left := VBoxContainer.new()
 	_left_pane = left
@@ -275,6 +344,7 @@ func _build_strips(parent: HBoxContainer) -> void:
 func _build_display(parent: HBoxContainer) -> void:
 	# 中间这块是"席位主窗口"：顶部数据标签栏 + 下方当前页
 	var center := VBoxContainer.new()
+	_center_pane = center
 	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	center.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	parent.add_child(center)
