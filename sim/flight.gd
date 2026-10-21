@@ -95,6 +95,30 @@ var ground_ready_at := -1.0
 ## 这句话是否已经说过
 var ground_ready_said := false
 
+## ---- 玩家可见状态（07 §6.1）----
+## 九个运行状态。放行席自己只推进到 ②③；④–⑨ 由地面席/塔台席写入 ops_state。
+const VIS_STATES := [
+	"地勤中", "未放行", "已放行", "正在推出", "正在滑行",
+	"滑行道等待点等待", "跑道外等待", "滑跑起飞", "已离地",
+]
+## 后续席位写入的运行状态；-1 表示还没进入地面/塔台阶段
+var ops_state := -1
+## 放行席是否明确"不通报滑行路线"（08 §5.2 的策略选择）
+var dep_taxi_skip := false
+
+
+## 当前可见状态（0–8）。后续席位只要写 ops_state 就能接管。
+func visible_state() -> int:
+	if ops_state >= 0:
+		return clampi(ops_state, 0, VIS_STATES.size() - 1)
+	if state == State.CLEARED:
+		return 2
+	return 1
+
+
+func visible_state_text() -> String:
+	return String(VIS_STATES[visible_state()])
+
 ## ---- 飞行计划原值：放行前要与"当前有效值"逐项对照（放行机制规范 §1.2）----
 var plan_origin := ""      # 计划起飞机场
 var plan_route := ""       # 计划航路
@@ -203,6 +227,8 @@ func to_dict() -> Dictionary:
 		"emergency": emergency,
 		"ground_ready_at": ground_ready_at,
 		"ground_ready_said": ground_ready_said,
+		"ops_state": ops_state,
+		"dep_taxi_skip": dep_taxi_skip,
 		"atis_notified": atis_notified,
 	}
 
@@ -279,6 +305,8 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.emergency = str(d.get("emergency", ""))
 	f.ground_ready_at = float(d.get("ground_ready_at", -1.0))
 	f.ground_ready_said = bool(d.get("ground_ready_said", false))
+	f.ops_state = int(d.get("ops_state", -1))
+	f.dep_taxi_skip = bool(d.get("dep_taxi_skip", false))
 	return f
 
 

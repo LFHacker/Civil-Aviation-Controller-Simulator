@@ -535,6 +535,14 @@ func score_report() -> Dictionary:
 	if dep_skip > 0:
 		_add_line(lines, "离场情报漏报 %d 项" % dep_skip, -dep_skip)
 		total -= dep_skip
+
+	var taxi_skipped := 0
+	for f in flights:
+		if (f as Flight).dep_taxi_skip:
+			taxi_skipped += 1
+	if taxi_skipped > 0:
+		_add_line(lines, "滑行路线未通报 %d 架" % taxi_skipped, -taxi_skipped)
+		total -= taxi_skipped
 	if emergency_count > 0:
 		_add_line(lines, "通播有误导致特情 %d 起" % emergency_count,
 			-5 * emergency_count)
@@ -1436,15 +1444,30 @@ func notify_all_dep_info(callsign: String) -> Dictionary:
 
 
 ## 还有几条该通报没通报（机组没抄 ATIS 时才存在这个问题）
+## 明确选了"不通报滑行路线"的那一条不算漏（08 §5.2 的策略选择），
+## 但会在评分里单独记一笔"滑行路线未通报"。
 func dep_info_missing(f: Flight) -> int:
 	var n := 0
 	for it in departure_info_items(f):
 		var d: Dictionary = it
 		if bool(d.get("required", false)):
 			continue
+		if String(d.get("key", "")) == "taxi" and f.dep_taxi_skip:
+			continue
 		if not bool(d.get("notified", false)):
 			n += 1
 	return n
+
+
+## 策略选择：滑行路线不通报（机组到地面席再拿）
+func set_dep_taxi_skip(callsign: String, skip: bool) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	f.dep_taxi_skip = skip
+	if skip:
+		f.dep_info_notified.erase("taxi")
+	return {"ok": true, "error": ""}
 
 
 ## 校验应答机：必须 4 位、每位 0-7（八进制）。

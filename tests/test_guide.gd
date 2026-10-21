@@ -14,6 +14,8 @@ func _initialize() -> void:
 	_test_call_types()
 	_test_teaching()
 	_test_ground_ready()
+	_test_visible_state()
+	_test_taxi_skip()
 	print("")
 	print("────────────────────────────")
 	if _fails == 0:
@@ -111,6 +113,58 @@ func _test_ground_ready() -> void:
 	d2.handoff_ground("GRD001", 6.0)
 	d2.tick(g.ground_ready_at + 1.0)
 	_check(not g.ground_ready_said, "移交后不再播这句")
+
+
+func _test_visible_state() -> void:
+	_section("九个可见状态（07 §6.1）")
+	_check(Flight.VIS_STATES.size() == 9, "状态表 9 项",
+		str(Flight.VIS_STATES.size()))
+	var f := Flight.new()
+	_check(f.visible_state() == 1, "未放行 = 1", str(f.visible_state()))
+	_check(f.visible_state_text() == "未放行", "文案", f.visible_state_text())
+	f.state = Flight.State.SENT
+	_check(f.visible_state() == 1, "发了许可但没确认，仍算未放行")
+	f.state = Flight.State.CLEARED
+	_check(f.visible_state() == 2, "已放行 = 2", str(f.visible_state()))
+	_check(f.visible_state_text() == "已放行", "文案", f.visible_state_text())
+
+	# 后续席位写 ops_state 就能接管（④–⑨）
+	f.ops_state = 4
+	_check(f.visible_state() == 4, "地面席写入正在滑行")
+	_check(f.visible_state_text() == "正在滑行", f.visible_state_text())
+	f.ops_state = 8
+	_check(f.visible_state_text() == "已离地", f.visible_state_text())
+	f.ops_state = 99
+	_check(f.visible_state() == 8, "越界被夹住", str(f.visible_state()))
+
+	var back := Flight.from_dict(f.to_dict())
+	_check(back.ops_state == 99, "ops_state 往返")
+
+
+func _test_taxi_skip() -> void:
+	_section("滑行路线「通报 / 不通报」（08 §5.2）")
+	var d := _desk()
+	var f := d.get_flight("GRD001")
+	f.atis_ok = false
+	# 什么都没通报时：滑行路线算漏
+	var before := d.dep_info_missing(f)
+	var r := d.set_dep_taxi_skip("GRD001", true)
+	_check(bool(r.ok), "可以选不通报", String(r.error))
+	_check(f.dep_taxi_skip, "标记上了")
+	_check(d.dep_info_missing(f) == before - 1, "不通报之后不再算漏",
+		"%d -> %d" % [before, d.dep_info_missing(f)])
+
+	var rep := d.score_report()
+	var has := false
+	for l in rep.lines:
+		if String((l as Dictionary).label).contains("滑行路线未通报"):
+			has = true
+	_check(has, "评分里单独记一笔")
+
+	# 再切回来
+	d.set_dep_taxi_skip("GRD001", false)
+	_check(not f.dep_taxi_skip, "可以切回通报")
+	_check(d.dep_info_missing(f) == before, "又算回漏报", str(d.dep_info_missing(f)))
 
 
 func _section(title: String) -> void:

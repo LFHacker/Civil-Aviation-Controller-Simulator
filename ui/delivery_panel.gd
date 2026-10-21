@@ -61,6 +61,7 @@ var _text_edit: LineEdit
 var _text_btn: Button
 var _dep_card: PanelContainer
 var _dep_grid: GridContainer
+var _dep_taxi_btn: Button
 var _accept_btn: Button
 var _reissue_btn: Button
 var _log_box: VBoxContainer
@@ -695,6 +696,12 @@ func _build_editor(parent: HBoxContainer) -> void:
 	var dsp := Control.new()
 	dsp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	dhead.add_child(dsp)
+	# 08 §5.2 的策略选择：滑行路线可以不通报（机组到地面席再拿，扣一格分）
+	_dep_taxi_btn = _action_button("不通报滑行路线", AtcTheme.C_TEXT_SOFT)
+	_dep_taxi_btn.custom_minimum_size = Vector2(124.0 * AtcTheme.UI_SCALE,
+		26.0 * AtcTheme.UI_SCALE)
+	_dep_taxi_btn.pressed.connect(_on_toggle_taxi_skip)
+	dhead.add_child(_dep_taxi_btn)
 	var all_btn := _action_button("全部通报", AtcTheme.C_WARM)
 	all_btn.custom_minimum_size = Vector2(96.0 * AtcTheme.UI_SCALE,
 		26.0 * AtcTheme.UI_SCALE)
@@ -1724,6 +1731,20 @@ func _on_issue_text() -> void:
 	if bool(r.ok):
 		_text_edit.text = ""
 	_handle_issue_result(r)
+
+
+func _on_toggle_taxi_skip() -> void:
+	if desk == null or _selected == "":
+		return
+	var f := desk.get_flight(_selected)
+	if f == null:
+		return
+	var r := desk.set_dep_taxi_skip(_selected, not f.dep_taxi_skip)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	refresh()
 
 
 func _on_notify_all_dep() -> void:
