@@ -29,7 +29,7 @@ func _initialize() -> void:
 	quit(0 if _fails == 0 else 1)
 
 
-func _desk(atis_ok: bool = true) -> DeliveryDesk:
+func _desk(atis_ok: bool = true, callsign: String = "ISS001") -> DeliveryDesk:
 	var d := DeliveryDesk.new()
 	d.setup(2718)
 	d.field = {
@@ -39,10 +39,10 @@ func _desk(atis_ok: bool = true) -> DeliveryDesk:
 	}
 	d.review_ref = {"types": {}, "alternates": [], "routes": {}, "loa": []}
 	d.enable_dep_info = true
-	d.set_plan([{"callsign": "ISS001", "type": "B738", "dest": "ZBAA",
+	d.set_plan([{"callsign": callsign, "type": "B738", "dest": "ZBAA",
 		"stand": "A05", "sid": "RUMUK 8D", "alt": 6000}])
 	d.spawn_request(0.0)
-	var f := d.get_flight("ISS001")
+	var f := d.get_flight(callsign)
 	f.checked = true
 	f.atis_ok = atis_ok
 	f.squawk = "4321"
@@ -74,6 +74,16 @@ func _test_free_text() -> void:
 		+ "初始高度 6000 米，应答机 4321，修正海压 1013。"
 	var r := d.issue_free_text("ISS001", good, 0.0)
 	_check(bool(r.ok), "完整通话说得对就能发", String(r.error))
+
+	# 呼号里带 4 位数字时，不能被当成应答机（真踩过的 bug：
+	# "CES5175…应答机 4321" 会被读成应答机 5175）
+	var dq := _desk(true, "CES5175")
+	var rq := dq.issue_free_text("CES5175",
+		"CES5175，许可放行至 ZBAA，按 RUMUK 8D 离场，初始高度 6000 米，" \
+		+ "应答机 4321，修正海压 1013。", 0.0)
+	_check(bool(rq.ok), "带数字的呼号也能正常发", String(rq.error))
+	_check(dq.get_flight("CES5175").squawk == "4321",
+		"呼号里的 5175 没被当成应答机", dq.get_flight("CES5175").squawk)
 
 	# 缺呼号
 	var d2 := _desk()

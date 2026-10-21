@@ -141,8 +141,17 @@ const REQUEST_INTERVAL := 60.0
 const MAX_REQUESTS := 3
 
 ## ---- 许可发布模式（规范 §5.1）----
-## "preset" 预设一键 / "form" 填空式 / "text" 自由文本
+## "preset" 预设一键 / "form" 填空式 / "text" 自由文本 / "voice" 真实语音（08 §4）
 var issue_mode := "form"
+## ---- 高级模式：真实语音通话（08 §4）----
+## 最近一次语音判定结果 {action, text, reason, kind...}，供面板回显
+var last_voice := {}
+## 被判"没听清"的次数（进评分；教学关卡不该被扣太多）
+var voice_unheard := 0
+## 高级模式的无障碍开关：语音失败时是否允许文本兜底（§4.5，默认关闭）
+var allow_text_fallback := false
+## 语音辅助功能开关（§4.4），缺省值见 VoiceMode.AUX_DEFAULTS
+var voice_aux := {}
 ## ---- 离场情报通报（规范 §5.2）----
 var enable_dep_info := false
 ## 离场情报的条目；QNH 是刚性项（不因 ATIS 省略），其余可因已抄收 ATIS 省略
@@ -1343,14 +1352,16 @@ func issue_free_text(callsign: String, text: String, sim_time: float) -> Diction
 			break
 	if sid == "":
 		missing.append("离场程序")
+	# 扫数字之前先把呼号遮掉：CES5175 里的 5175 不能被当成应答机/高度（真踩过）
+	var scan := VoiceMode.mask_callsigns(t, [f.callsign])
 	var alt := 0
 	for a in ALT_OPTIONS:
-		if t.contains(str(a)):
+		if scan.contains(str(a)):
 			alt = a
 			break
 	if alt == 0:
 		missing.append("初始高度")
-	var sq := find_squawk_in_text(t, alt)
+	var sq := find_squawk_in_text(scan, alt)
 	if sq == "":
 		missing.append("应答机编码")
 
@@ -1368,6 +1379,44 @@ func issue_free_text(callsign: String, text: String, sim_time: float) -> Diction
 			% "、".join(PackedStringArray(missing))}
 
 	return issue_clearance(callsign, sid, alt, sq, sim_time)
+
+
+## 高级模式（真实语音通话，08 §4）的入口：ASR 转录 + 置信度 → 该干什么。
+##
+## 文档 §4.3 规定三种回退语义，都在这里判：
+##   · 置信度低于门槛 → 不提示玩家重输，而是**模拟驾驶舱没听清**，AI 重新呼叫；
+##   · 解析不出内容 → 同上（"没听清"）；
+##   · 呼号与当前选中航班不符 → 系统提示"呼号不符，请确认"。
+## 转录先经 VoiceMode.normalize() 规范化（「幺两洞洞」→「1200」），
+## 再交给 issue_free_text() 走与进阶模式**完全一致**的七项要素校验，不另写一套。
+##
+## mic/ASR 引擎不在这里：它的输出是入参。这样这条链路能在无头环境下测。
+func issue_voice(callsign: String, transcript: String, confidence: float,
+		sim_time: float, teaching: bool = false) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	var known: Array = []
+	for fl in flights:
+		known.append(fl.callsign)
+	var dec := VoiceMode.decide(transcript, confidence, callsign, known, teaching)
+	last_voice = dec
+	var action := String(dec.get("action", ""))
+	if action == "unheard":
+		voice_unheard += 1
+		var line := "%s，没听清，请再说一遍。" % f.callsign
+		_log(sim_time, "pilot", line)
+		return {"ok": true, "unheard": true, "line": line,
+			"text": String(dec.get("text", "")),
+			"error": "机组没听清（%s），请重新说" % String(dec.get("reason", ""))}
+	if action == "mismatch":
+		return {"ok": false, "mismatch": true,
+			"said": String(dec.get("said", "")),
+			"error": "呼号不符，请确认（说的是 %s）" % String(dec.get("said", ""))}
+	var res := issue_free_text(callsign, String(dec.get("text", "")), sim_time)
+	res["voice"] = true
+	res["kind"] = String(dec.get("kind", ""))
+	return res
 
 
 ## 从一段通话里找 4 位八进制应答机编码（排除高度之类已经用掉的数字）。
@@ -1852,6 +1901,67 @@ func mark_readback_item(callsign: String, key: String, same: bool,
 		return {"ok": false, "error": "简易模式不需要逐项标记"}
 	f.readback_marks[key] = same
 	return {"ok": true, "error": ""}
+
+
+## 语音复诵（08 §4）：识别端返回的变体标签 → 逐项标记。
+##
+## 标签就是"机组把哪一项读错了"：v_ok / v_alt / v_squawk / v_qnh / v_sid / v_limit。
+## 所以这一步不是"再判一次真伪"，而是把识别结果**翻译成**已有的逐项标记，
+## 与高阶模式玩家手点的 mark_readback_item() 落到同一份数据里。
+func apply_voice_readback(callsign: String, tag: String, confidence: float,
+		sim_time: float, teaching: bool = false) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	if f.state != Flight.State.READBACK:
+		return {"ok": false, "error": "%s 当前没有待复核的复诵" % callsign}
+	if not VoiceMode.confident(confidence, teaching):
+		voice_unheard += 1
+		var line := "%s，没听清，请再说一遍。" % f.callsign
+		_log(sim_time, "pilot", line)
+		last_voice = {"action": "unheard", "reason": "复诵置信度低"}
+		return {"ok": true, "unheard": true, "line": line,
+			"error": "机组复诵没听清，请重新说"}
+	var pt := VoiceGrammar.parse_tag(tag)
+	if not bool(pt.get("known", false)):
+		voice_unheard += 1
+		var line2 := "%s，没听清，请再说一遍。" % f.callsign
+		_log(sim_time, "pilot", line2)
+		last_voice = {"action": "unheard", "reason": "没识别出是哪一条"}
+		return {"ok": true, "unheard": true, "line": line2,
+			"error": "没听清复诵内容，请重新说"}
+	var wrong := String(pt.get("wrong", ""))
+	var marked := 0
+	for it in f.readback_items:
+		var d: Dictionary = it
+		var key := String(d.get("key", ""))
+		var same := true
+		if wrong == "sid":
+			# 程序读错，航路必然跟着错（程序与航路是一对）
+			same = not (key == "sid" or key == "route")
+		elif wrong == "limit":
+			# 放行界限不在逐项复诵表里（它属于通话一开头），单独提示
+			same = true
+		elif wrong != "":
+			same = key != wrong
+		if readback_hard:
+			f.readback_marks[key] = same
+		marked += 1
+	last_voice = {"action": "readback", "tag": tag, "wrong": wrong}
+	var note := "复诵正确" if wrong == "" else "复诵把「%s」读错了" % _voice_item_label(wrong)
+	return {"ok": true, "tag": tag, "wrong": wrong, "marked": marked,
+		"note": note, "error": "" if wrong == "" else note}
+
+
+## 变体标签对应的中文名（面板提示用）
+static func _voice_item_label(key: String) -> String:
+	match key:
+		"alt": return "初始高度"
+		"squawk": return "应答机"
+		"qnh": return "修正海压"
+		"sid": return "离场程序"
+		"limit": return "放行界限"
+	return key
 
 
 ## 还有几项没核对（高阶模式界面上用来决定按钮是否可用）
