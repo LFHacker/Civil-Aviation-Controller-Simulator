@@ -32,7 +32,8 @@ func _process(_dt: float) -> bool:
 		12: _check_result()
 		14: _check_modes()
 		16: _check_speak()
-		18: _finish()
+		18: _check_aux()
+		20: _finish()
 	return false
 
 
@@ -162,6 +163,58 @@ func _check_speak() -> void:
 	_panel._maybe_speak_readback(f)
 	_check(String(_panel._rb_spoken) == first, "同一份复诵不会重复读",
 		String(_panel._rb_spoken))
+
+
+func _check_aux() -> void:
+	_section("语音辅助（§4.4 / §4.5）")
+	var w := VoiceAuxWindow.new()
+	root.add_child(w)
+	w.open(_desk)
+	_check(w.visible, "辅助窗口能打开")
+	_check(w._rows.size() == 6, "五项辅助 + 一项无障碍", str(w._rows.size()))
+	# 默认值应来自 VoiceMode.AUX_DEFAULTS，而不是全部关闭
+	_check(w._rows["transcript"].text.begins_with("☑"), "转录显示默认开",
+		w._rows["transcript"].text)
+	_check(w._rows["read_numbers"].text.begins_with("☐"), "数值朗读默认关",
+		w._rows["read_numbers"].text)
+	# 点一下写回放行席
+	w._on_toggle("read_numbers", false)
+	_check(VoiceMode.aux_enabled(_desk.voice_aux, "read_numbers"), "开关写回放行席")
+	_check(w._rows["read_numbers"].text.begins_with("☑"), "按钮文字跟着变",
+		w._rows["read_numbers"].text)
+	w._on_toggle("read_numbers", false)
+	_check(not VoiceMode.aux_enabled(_desk.voice_aux, "read_numbers"), "再点能关掉")
+	# §4.5 无障碍兜底
+	w._on_toggle("text_fallback", true)
+	_check(_desk.allow_text_fallback, "文本兜底开关写回")
+	w._on_toggle("text_fallback", true)
+	_check(not _desk.allow_text_fallback, "文本兜底能关回去")
+	w.free()
+
+	# 面板要跟着这些开关走
+	var f := _desk.get_flight("ISS001")
+	f.state = Flight.State.PENDING
+	_desk.issue_mode = "voice"
+	_desk.voice_aux = {"transcript": false, "reference": false,
+		"read_template": true}
+	_panel.refresh()
+	_check(not _panel._voice_text.visible, "关掉转录显示后转录标签隐藏")
+	_check(not _panel._info_card.visible, "关掉参考面板后天气卡片隐藏")
+	var has_lib := VoiceLibrary.new().ready_for("controller")
+	_check(_panel._voice_demo_btn.visible == has_lib,
+		"「听示例」只在开关打开且片段库就绪时出现",
+		str(_panel._voice_demo_btn.visible))
+	# §4.5：高级模式默认不给文本框，打开无障碍才放出来
+	_check(not _panel._text_row.visible, "默认不提供文本备用")
+	_desk.allow_text_fallback = true
+	_panel.refresh()
+	_check(_panel._text_row.visible, "打开无障碍后才出现文本框")
+	# 恢复默认，避免影响后续
+	_desk.allow_text_fallback = false
+	_desk.voice_aux = {}
+	_panel.refresh()
+	_check(_panel._voice_text.visible and _panel._info_card.visible,
+		"恢复默认后都回来")
 
 
 func _finish() -> void:

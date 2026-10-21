@@ -153,6 +153,8 @@ var last_voice := {}
 var voice_unheard := 0
 ## 高级模式的无障碍开关：语音失败时是否允许文本兜底（§4.5，默认关闭）
 var allow_text_fallback := false
+## 教学关卡（08 §4.6）：语音识别容错放宽，避免玩家因发音被卡住
+var teaching := false
 ## 语音辅助功能开关（§4.4），缺省值见 VoiceMode.AUX_DEFAULTS
 var voice_aux := {}
 ## ---- 离场情报通报（规范 §5.2）----
@@ -1402,7 +1404,8 @@ func issue_voice(callsign: String, transcript: String, confidence: float,
 	var known: Array = []
 	for fl in flights:
 		known.append(fl.callsign)
-	var dec := VoiceMode.decide(transcript, confidence, callsign, known, teaching)
+	var dec := VoiceMode.decide(transcript, confidence, callsign, known,
+		teaching or self.teaching)
 	last_voice = dec
 	var action := String(dec.get("action", ""))
 	if action == "unheard":
@@ -1918,7 +1921,7 @@ func apply_voice_readback(callsign: String, tag: String, confidence: float,
 		return {"ok": false, "error": "找不到航班 %s" % callsign}
 	if f.state != Flight.State.READBACK:
 		return {"ok": false, "error": "%s 当前没有待复核的复诵" % callsign}
-	if not VoiceMode.confident(confidence, teaching):
+	if not VoiceMode.confident(confidence, teaching or self.teaching):
 		voice_unheard += 1
 		var line := "%s，没听清，请再说一遍。" % f.callsign
 		_log(sim_time, "pilot", line)

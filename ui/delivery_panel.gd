@@ -69,6 +69,9 @@ var _voice_busy := false
 ## 语音播报（08 §4「说」）
 var _vp: VoicePlayer
 var _rb_spoken := ""
+## 语音辅助（08 §4.4）：参考面板卡片、示例朗读按钮
+var _info_card: PanelContainer
+var _voice_demo_btn: Button
 var _dep_card: PanelContainer
 var _dep_grid: GridContainer
 var _dep_taxi_btn: Button
@@ -605,6 +608,12 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_voice_text = _label("", 12, 400, AtcTheme.C_TEXT_SOFT)
 	_voice_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_voice_row.add_child(_voice_text)
+	# §4.4「通话模板朗读」：只示范，不发送
+	_voice_demo_btn = _action_button("听示例", AtcTheme.C_TEXT_SOFT)
+	_voice_demo_btn.custom_minimum_size = Vector2(0, 28.0 * AtcTheme.UI_SCALE)
+	_voice_demo_btn.focus_mode = Control.FOCUS_NONE
+	_voice_demo_btn.pressed.connect(_on_voice_demo)
+	_voice_row.add_child(_voice_demo_btn)
 
 	# 机组漏报通播时的提示卡（第一百五十九条：建立联络应当表明已收到通播）
 	_atis_card = PanelContainer.new()
@@ -791,6 +800,7 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_atis_fix_row.add_child(_atis_report_btn)
 
 	var info := PanelContainer.new()
+	_info_card = info
 	var isb := StyleBoxFlat.new()
 	isb.bg_color = Color(1, 1, 1, 0.02)
 	isb.border_color = Color(1, 1, 1, 0.06)
@@ -990,8 +1000,37 @@ func _info_row(key: String, value: String) -> void:
 	var k := _label(key, 12, 400, AtcTheme.C_TEXT_FAINT)
 	k.custom_minimum_size = Vector2(74.0 * AtcTheme.UI_SCALE, 0)
 	row.add_child(k)
-	row.add_child(_label(value, 12, 500, AtcTheme.C_TEXT_SOFT))
+	var v := _label(value, 12, 500, AtcTheme.C_TEXT_SOFT)
+	# §4.4「数值朗读辅助」：点一下按标准读法念出来（幺两洞洞）。
+	# 只对含数字的值有用；纯文字（CAVOK 之类）点了不播。
+	v.mouse_filter = Control.MOUSE_FILTER_STOP
+	v.tooltip_text = "点一下听标准读法"
+	v.gui_input.connect(_on_value_clicked.bind(value))
+	row.add_child(v)
 	_airport_box.add_child(row)
+
+
+func _on_value_clicked(ev: InputEvent, value: String) -> void:
+	if desk == null:
+		return
+	if not VoiceMode.aux_enabled(desk.voice_aux, "read_numbers"):
+		return
+	if not (ev is InputEventMouseButton):
+		return
+	var mb := ev as InputEventMouseButton
+	if not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	# 去掉单位与非数字，只念数字部分
+	var digits := ""
+	for i in range(value.length()):
+		var c := value[i]
+		if c >= "0" and c <= "9":
+			digits += c
+	if digits == "":
+		return
+	var vp := _ensure_player()
+	vp.enabled = true
+	vp.play(Voice.digits(digits), "controller")
 
 
 ## 每帧由会话界面调用：推进放行席，必要时重建界面。
@@ -1365,13 +1404,24 @@ func _refresh_detail() -> void:
 	_maybe_speak_readback(f)
 	# 四种发布模式（规范 §5.1 + 08 §4 高级模式）：只有当前模式对应的控件可见
 	_cand_box.visible = desk.issue_mode == "preset" and can_issue
-	_text_row.visible = desk.issue_mode == "text" and can_issue
+	# 高级模式默认不给文本备用（§4.5），只有打开无障碍开关才放出文本框
+	var text_ok := desk.issue_mode == "text" \
+		or (desk.issue_mode == "voice" and desk.allow_text_fallback)
+	_text_row.visible = text_ok and can_issue
+	# §4.4「参考面板」：关掉就把右下角天气与计划卡片收起来
+	if _info_card != null:
+		_info_card.visible = VoiceMode.aux_enabled(desk.voice_aux, "reference")
 	if _voice_row != null:
 		# 语音模式在"可发放行"或"等复诵"时都要能说话：前者说许可，后者复诵识别
 		_voice_row.visible = desk.issue_mode == "voice" and \
 			(can_issue or f.state == Flight.State.READBACK)
 		if _voice_row.visible:
 			_refresh_voice_label(f)
+			_voice_text.visible = VoiceMode.aux_enabled(desk.voice_aux, "transcript")
+			if _voice_demo_btn != null:
+				_voice_demo_btn.visible = \
+					VoiceMode.aux_enabled(desk.voice_aux, "read_template") \
+					and VoiceLibrary.new().ready_for("controller")
 	if _cand_box.visible:
 		_refresh_candidates()
 
@@ -1927,6 +1977,23 @@ func _refresh_voice_label(f: Flight) -> void:
 	else:
 		_voice_state.text = "按住说出放行许可，松开识别"
 	_voice_state.add_theme_color_override("font_color", AtcTheme.C_TEXT_DIM)
+
+
+## §4.4「通话模板朗读」：听一条标准通话，只示范不发送
+func _on_voice_demo() -> void:
+	if desk == null or _selected == "":
+		return
+	var f := desk.get_flight(_selected)
+	if f == null:
+		return
+	var vp := _ensure_player()
+	vp.enabled = true
+	# 示例朗读不受「语音播报」开关限制：它是学习辅助，不是通话播报
+	vp.play(Voice.clearance(f.callsign, f.sid,
+		f.clearance_limit if f.clearance_limit != "" else f.destination,
+		f.initial_alt_m, f.squawk, int(desk.field.get("qnh", 0))), "controller")
+	_voice_text.visible = true
+	_voice_text.text = "示例：" + desk.clearance_text(f)
 
 
 func _on_voice_down() -> void:

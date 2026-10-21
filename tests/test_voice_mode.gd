@@ -194,6 +194,23 @@ func _test_desk_voice() -> void:
 
 	_check(d5.last_voice.has("action"), "放行席记下最近一次语音判定")
 
+	# 08 §4.6 教学关卡：放行席开着 teaching 时，低置信度不该卡玩家
+	var d6 := _desk()
+	d6.teaching = true
+	var r6 := d6.issue_voice("ISS001",
+		"ISS001 许可放行至 ZBAA 按 RUMUK 8D 离场 初始高度 6000 米 应答机 4321 修正海压 1013",
+		0.30, 1.0)
+	_check(bool(r6.ok) and not bool(r6.get("unheard", false)),
+		"教学关卡（放行席 teaching）放宽识别门槛", str(r6))
+	_check(d6.get_flight("ISS001").state == Flight.State.SENT, "教学关卡里许可真发出去了",
+		str(d6.get_flight("ISS001").state))
+	# 不复诵时也不该被门槛拦住
+	var d7 := _rb_desk()
+	d7.teaching = true
+	var r7 := d7.apply_voice_readback("RBK001", "v_qnh", 0.30, 10.0)
+	_check(bool(r7.ok) and not bool(r7.get("unheard", false)),
+		"教学关卡里低置信度复诵也照判", str(r7))
+
 
 func _test_grammar() -> void:
 	_section("闭集语法（听）")

@@ -54,6 +54,15 @@ func _ready() -> void:
 	_build_options_menu()
 	_build_toast()
 
+	# 语音辅助（08 §4.4 / §4.5）：五项辅助 + 无障碍兜底
+	_aux_win = VoiceAuxWindow.new()
+	_aux_win.name = "VoiceAuxWindow"
+	_root.add_child(_aux_win)
+	_aux_win.closed.connect(func() -> void: _refresh_seat_panel())
+	_aux_win.changed.connect(func() -> void:
+		_save_game_settings()
+		_refresh_seat_panel())
+
 	_save_screen = SaveScreen.new()
 	_save_screen.name = "SaveScreen"
 	_root.add_child(_save_screen)
@@ -260,6 +269,8 @@ const OPT_MODE := 200
 const OPT_CAND := 300
 ## 语音播报开关（08 §4「说」）
 const OPT_SPEAK := 400
+## 语音辅助设置（08 §4.4 / §4.5）
+const OPT_VOICE_AUX := 500
 const DIFF_NAMES := ["简易", "进阶", "高阶"]
 const DIFF_KEYS := ["easy", "normal", "hard"]
 const MODE_NAMES := ["预设一键", "填空式", "自由文本", "真实语音"]
@@ -272,6 +283,8 @@ var _opt_diff_buttons: Array = []
 var _opt_mode_buttons: Array = []
 var _opt_cand_btn: Button
 var _opt_speak_btn: Button
+var _opt_aux_btn: Button
+var _aux_win: VoiceAuxWindow
 
 
 func _build_options_menu() -> void:
@@ -330,6 +343,8 @@ func _build_options_menu() -> void:
 	col.add_child(_opt_cand_btn)
 	_opt_speak_btn = _option_button("", OPT_SPEAK)
 	col.add_child(_opt_speak_btn)
+	_opt_aux_btn = _option_button("语音辅助…", OPT_VOICE_AUX)
+	col.add_child(_opt_aux_btn)
 	col.add_child(_option_divider())
 	col.add_child(_option_button("返回主菜单    ESC", OPT_EXIT))
 
@@ -404,8 +419,13 @@ func _refresh_option_texts() -> void:
 		var mark := "● " if DIFF_KEYS[i] == diff else "○ "
 		_opt_diff_buttons[i].text = mark + DIFF_NAMES[i]
 	for i in range(_opt_mode_buttons.size()):
-		var mark2 := "● " if MODE_KEYS[i] == mode else "○ "
-		_opt_mode_buttons[i].text = mark2 + MODE_NAMES[i]
+		var active := String(MODE_KEYS[i]) == mode
+		var pending := bool(_next_issue_mode != "" \
+			and String(MODE_KEYS[i]) == _next_issue_mode \
+			and _next_issue_mode != mode)
+		var mark2 := "● " if active else ("◐ " if pending else "○ ")
+		_opt_mode_buttons[i].text = mark2 + MODE_NAMES[i] \
+			+ ("（下局生效）" if pending else "")
 	if _opt_cand_btn != null:
 		var cand := d != null and d.candidate_error
 		_opt_cand_btn.text = ("☑ " if cand else "☐ ") + "含错误候选"
@@ -449,13 +469,22 @@ func _set_difficulty(i: int) -> void:
 	_save_game_settings()
 
 
+## 08 §6.2：对话模式「游戏进行中不可切换，设置中修改仅对下一局生效」。
+## 所以这里**只记下偏好**，不动正在跑的放行席；下一局 _load_game_settings 才套上。
 func _set_issue_mode(i: int) -> void:
 	if session == null or session.delivery == null:
 		return
 	if i < 0 or i >= MODE_KEYS.size():
 		return
-	session.delivery.issue_mode = MODE_KEYS[i]
+	var want := String(MODE_KEYS[i])
+	_next_issue_mode = want
 	_save_game_settings()
+	if want != session.delivery.issue_mode:
+		show_toast("陆空对话模式改为「%s」，下一局生效" % MODE_NAMES[i])
+
+
+## 下一局要用的对话模式（本局不变）
+var _next_issue_mode := ""
 
 
 ## 难度/发布模式写进同一个设置文件，下一局沿用
@@ -465,9 +494,15 @@ func _save_game_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load("user://settings.cfg")
 	cfg.set_value("game", "difficulty", session.delivery.difficulty)
-	cfg.set_value("game", "issue_mode", session.delivery.issue_mode)
+	# 存的是"下一局用的模式"（§6.2：本局不可切换）
+	var save_mode := session.delivery.issue_mode
+	if _next_issue_mode != "":
+		save_mode = _next_issue_mode
+	cfg.set_value("game", "issue_mode", save_mode)
 	cfg.set_value("game", "candidate_error", session.delivery.candidate_error)
 	cfg.set_value("game", "speak_enabled", session.delivery.speak_enabled)
+	cfg.set_value("game", "allow_text_fallback", session.delivery.allow_text_fallback)
+	cfg.set_value("game", "voice_aux", session.delivery.voice_aux)
 	cfg.save("user://settings.cfg")
 
 
@@ -481,13 +516,24 @@ func _load_game_settings() -> void:
 	var d := session.delivery
 	d.difficulty = str(cfg.get_value("game", "difficulty", d.difficulty))
 	d.issue_mode = str(cfg.get_value("game", "issue_mode", d.issue_mode))
+	_next_issue_mode = d.issue_mode
 	d.candidate_error = bool(cfg.get_value("game", "candidate_error", d.candidate_error))
 	d.speak_enabled = bool(cfg.get_value("game", "speak_enabled", d.speak_enabled))
+	d.allow_text_fallback = bool(cfg.get_value("game", "allow_text_fallback",
+		d.allow_text_fallback))
+	var aux: Variant = cfg.get_value("game", "voice_aux", d.voice_aux)
+	if aux is Dictionary:
+		d.voice_aux = aux as Dictionary
 	d.readback_hard = d.difficulty == "hard"
 	d.handoff_hard = d.difficulty == "hard"
 
 
 func _on_option_selected(id: int) -> void:
+	if id == OPT_VOICE_AUX:
+		if _aux_win != null and session != null and session.delivery != null:
+			_aux_win.open(session.delivery)
+		_options_layer.visible = false
+		return
 	if id == OPT_SPEAK:
 		if session != null and session.delivery != null:
 			session.delivery.speak_enabled = not session.delivery.speak_enabled

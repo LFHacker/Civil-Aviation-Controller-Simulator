@@ -119,6 +119,8 @@ func apply_airport(data: Dictionary, seed_plan: bool = true) -> void:
 	delivery.enable_handoff_check = true
 	delivery.enable_dep_info = true
 	delivery.pilot_check_enabled = true
+	# 08 §4.6：教学关卡放宽语音容错，别让玩家因为发音被卡住
+	delivery.teaching = mode == MODE_TRAINING
 	if delivery.difficulty == "":
 		delivery.difficulty = "normal"
 	if not seed_plan:
