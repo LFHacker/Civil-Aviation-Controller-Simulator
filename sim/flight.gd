@@ -65,6 +65,10 @@ var readback_marks := {}
 var readback_deadline := -1.0
 ## 高阶模式里把不一致项误判为一致的次数（进评分）
 var missed_readback := 0
+## 移交检查清单里玩家逐项确认过的项（规范 §7.2 高阶模式）
+var handoff_confirmed := {}
+## 从复诵确认到移交超时（规范 §7.2，影响评分不阻断）
+var handoff_late := false
 
 ## ---- 飞行计划原值：放行前要与"当前有效值"逐项对照（放行机制规范 §1.2）----
 var plan_origin := ""      # 计划起飞机场
@@ -162,6 +166,8 @@ func to_dict() -> Dictionary:
 		"readback_marks": readback_marks.duplicate(),
 		"readback_deadline": readback_deadline,
 		"missed_readback": missed_readback,
+		"handoff_confirmed": handoff_confirmed.duplicate(),
+		"handoff_late": handoff_late,
 		"atis_notified": atis_notified,
 	}
 
@@ -224,6 +230,9 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.readback_marks = rm if rm is Dictionary else {}
 	f.readback_deadline = float(d.get("readback_deadline", -1.0))
 	f.missed_readback = int(d.get("missed_readback", 0))
+	var hc: Variant = d.get("handoff_confirmed", {})
+	f.handoff_confirmed = hc if hc is Dictionary else {}
+	f.handoff_late = bool(d.get("handoff_late", false))
 	return f
 
 

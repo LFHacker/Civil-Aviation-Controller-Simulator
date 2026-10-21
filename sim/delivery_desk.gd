@@ -115,11 +115,26 @@ const READBACK_LIMIT := 60.0
 ## 高阶模式超时退回的次数（进评分）
 var readback_timeouts := 0
 
+## ---- 移交地面（规范 §7）----
+## 是否启用移交检查清单。默认关闭，让老测试照旧。
+var enable_handoff_check := false
+## true = 高阶模式：清单不自动打勾，要玩家逐项确认，还有 90 秒时限
+var handoff_hard := false
+const HANDOFF_LIMIT := 90.0
+
+## 整理进程单的冷却（规范 §4.2：2 秒）
+const TIDY_COOLDOWN := 2.0
+var _tidy_at := -1.0
+## 通播发布时选错值的次数（进评分）
+var atis_err_count := 0
+
 ## 进行中的「协调修改」：key 为 "呼号|字段"，value 为 {"ready_at": 秒}
 var _coord := {}
 
 ## 调试用：置 true 后下一次复诵必定读错。给人工/自动化验证"复诵不一致"分支用。
 var force_error_next := false
+## 调试用：置 true 后下一次复诵必定读对（教学关、测试夹具用）
+var force_ok_next := false
 
 
 func setup(seed_value: int = 0) -> void:
@@ -359,9 +374,150 @@ func finish_review(callsign: String, sim_time: float) -> Dictionary:
 	return {"ok": true, "error": "", "missed": missed}
 
 
+# ---------------------------------------------------------------- 移交检查（规范 §7）
+
+## 五项检查（规范 §7.1）。每项 {key,label,ok}。
+func handoff_checklist(f: Flight) -> Array:
+	var atis_ok_now := true
+	if enable_atis_lifecycle:
+		atis_ok_now = f.atis_notified or not atis_expired
+	var cleared := f.state == Flight.State.CLEARED
+	return [
+		{"key": "plan", "label": "飞行计划已审查", "ok": f.checked},
+		{"key": "clearance", "label": "放行许可已发布",
+			"ok": cleared or f.state == Flight.State.SENT
+				or f.state == Flight.State.READBACK},
+		{"key": "readback", "label": "复诵已确认", "ok": cleared},
+		{"key": "qnh", "label": "修正海压已确认",
+			"ok": (not enable_qnh_gate) or f.qnh_confirmed},
+		{"key": "atis", "label": "通播状态已核对", "ok": atis_ok_now},
+	]
+
+
+## 可以移交了吗：条件全满足，且（高阶模式）玩家逐项确认过。
+func handoff_ready(f: Flight) -> bool:
+	for it in handoff_checklist(f):
+		if not bool((it as Dictionary).get("ok", false)):
+			return false
+		if handoff_hard and not f.handoff_confirmed.has(String((it as Dictionary).key)):
+			return false
+	return true
+
+
+## 高阶模式：逐项确认。条件不满足的项不允许确认（规范 §7.2）。
+func confirm_handoff_item(callsign: String, key: String) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	if not handoff_hard:
+		return {"ok": false, "error": "简易模式不需要逐项确认"}
+	for it in handoff_checklist(f):
+		var d: Dictionary = it
+		if String(d.key) != key:
+			continue
+		if not bool(d.ok):
+			return {"ok": false, "error": "「%s」还不满足，不能确认" % String(d.label)}
+		f.handoff_confirmed[key] = true
+		return {"ok": true, "error": ""}
+	return {"ok": false, "error": "清单里没有这一项"}
+
+
+# ---------------------------------------------------------------- 整理进程单（规范 §4）
+
+## 一键整理：按计划时刻重排、清掉已移交航班的残留排序位。
+## 不改变任何航班的状态与数据；2 秒冷却，防止频繁点击。
+func tidy_strips(sim_time: float) -> Dictionary:
+	if _tidy_at >= 0.0 and sim_time - _tidy_at < TIDY_COOLDOWN:
+		return {"ok": false, "error": "刚整理过，稍等一下再整理"}
+	_tidy_at = sim_time
+	reset_order()
+	var n := 0
+	for f in flights:
+		var fl := f as Flight
+		if fl.handed_off:
+			fl.order_rank = -1
+			n += 1
+	return {"ok": true, "error": "", "handed_off": n}
+
+
+# ---------------------------------------------------------------- 运行品质评分（规范 §11）
+
+## 评分不判负，只决定关卡星级/绩效等级。
+## 返回 {total, grade, lines:[{label, delta}]}，lines 按发生顺序给玩家看。
+func score_report() -> Dictionary:
+	var lines: Array = []
+	var total := 0
+
+	var on_time := 0
+	var late := 0
+	for f in flights:
+		var fl := f as Flight
+		if fl.state != Flight.State.CLEARED:
+			continue
+		if fl.slot_eval == "延误":
+			late += 1
+		else:
+			on_time += 1
+	if on_time > 0:
+		_add_line(lines, "按时放行 %d 架" % on_time, on_time * 2)
+		total += on_time * 2
+	if late > 0:
+		_add_line(lines, "顺序调整导致延误 %d 架" % late, -late)
+		total -= late
+
+	var missed_rb := 0
+	var missed_rev := 0
+	var late_ho := 0
+	var clean_ho := 0
+	for f in flights:
+		var fl := f as Flight
+		missed_rb += fl.missed_readback
+		missed_rev += fl.missed_review
+		if fl.handoff_late:
+			late_ho += 1
+		elif fl.handed_off:
+			clean_ho += 1
+	if clean_ho > 0:
+		_add_line(lines, "干净移交 %d 架" % clean_ho, clean_ho)
+		total += clean_ho
+	if missed_rb > 0:
+		_add_line(lines, "复诵漏检 %d 项" % missed_rb, -3 * missed_rb)
+		total -= 3 * missed_rb
+	if missed_rev > 0:
+		_add_line(lines, "计划异常漏检 %d 项" % missed_rev, -2 * missed_rev)
+		total -= 2 * missed_rev
+	if late_ho > 0:
+		_add_line(lines, "移交超时 %d 架" % late_ho, -late_ho)
+		total -= late_ho
+	if readback_timeouts > 0:
+		_add_line(lines, "复诵核对超时 %d 次" % readback_timeouts,
+			-2 * readback_timeouts)
+		total -= 2 * readback_timeouts
+	if misjudge_count > 0:
+		_add_line(lines, "误判复诵 %d 次" % misjudge_count, -misjudge_count)
+		total -= misjudge_count
+	if atis_err_count > 0:
+		_add_line(lines, "通播要素与实况不符 %d 次" % atis_err_count,
+			-3 * atis_err_count)
+		total -= 3 * atis_err_count
+
+	return {"total": total, "grade": _grade(total), "lines": lines}
+
+
+func _add_line(lines: Array, label: String, delta: int) -> void:
+	lines.append({"label": label, "delta": delta})
+
+
+static func _grade(total: int) -> String:
+	if total >= 10:
+		return "A"
+	if total >= 1:
+		return "B"
+	return "C"
+
+
 ## 该项是否正在协调中（界面显示「协调中…」）
-func review_coordinating(callsign: String, key: String) -> bool:
-	return _coord.has("%s|%s" % [callsign, key])
+func review_coordinating(callsign: String, key: String) -> bool:	return _coord.has("%s|%s" % [callsign, key])
 
 
 func _review_guard(callsign: String, key: String) -> Dictionary:
@@ -474,6 +630,8 @@ func update_atis(opts: Dictionary, sim_time: float) -> Dictionary:
 			"visibility": str(field.get("visibility", "")),
 			"qnh": int(field.get("qnh", 0))})
 	atis.update_count += 1
+	if atis.has_error:
+		atis_err_count += 1
 	atis_expired = false
 	atis_major = ""
 	_log(sim_time, "atc", "通播 %s 已发布：使用跑道 %s，修正海压 %d。" % [
@@ -534,6 +692,23 @@ func handoff_ground(callsign: String, sim_time: float) -> Dictionary:
 		return {"ok": false, "error": "%s 还没有完成放行，不能移交地面" % callsign}
 	if f.handed_off:
 		return {"ok": false, "error": "%s 已经移交给地面席" % callsign}
+
+	# 移交检查清单（规范 §7）：条件不满足不许移交，高阶模式还要逐项确认
+	if enable_handoff_check:
+		for it in handoff_checklist(f):
+			var d: Dictionary = it
+			if not bool(d.ok):
+				return {"ok": false, "error": "移交条件未满足：%s" % String(d.label)}
+		if handoff_hard:
+			for it in handoff_checklist(f):
+				var d2: Dictionary = it
+				if not f.handoff_confirmed.has(String(d2.key)):
+					return {"ok": false,
+						"error": "请先逐项确认：%s" % String(d2.label)}
+		# 90 秒时限：超了照常能移交，但打上标记进评分
+		if f.t_cleared >= 0.0 and sim_time - f.t_cleared > HANDOFF_LIMIT:
+			f.handoff_late = true
+
 	f.handed_off = true
 	f.t_handoff = sim_time
 	var ground_freq := str(field.get("ground_freq", ""))
@@ -1064,7 +1239,11 @@ static func readback_text_of(callsign: String, limit: String, sid: String,
 
 func _generate_readback(f: Flight, sim_time: float) -> void:
 	var wrong := false
-	if force_error_next:
+	if force_ok_next:
+		# 教学关/测试用：强制这一轮机组读对
+		force_ok_next = false
+		wrong = false
+	elif force_error_next:
 		wrong = true
 		force_error_next = false
 	else:

@@ -50,6 +50,9 @@ var _readback_text: Label
 var _readback_diff: Label
 var _rb_grid: GridContainer
 var _rb_timer: Label
+var _handoff_card: PanelContainer
+var _handoff_grid: GridContainer
+var _tidy_btn: Button
 var _accept_btn: Button
 var _reissue_btn: Button
 var _log_box: VBoxContainer
@@ -402,6 +405,12 @@ func _build_strips(parent: HBoxContainer) -> void:
 	_done_count = _label("已放行 0 架", 12, 400, AtcTheme.C_TEXT_FAINT)
 	left.add_child(_done_count)
 
+	# 整理进程单（规范 §4.2）：一键按计划时刻重排，2 秒冷却
+	_tidy_btn = _action_button("整理进程单", AtcTheme.C_TEXT_SOFT)
+	_tidy_btn.custom_minimum_size = Vector2(0, 28.0 * AtcTheme.UI_SCALE)
+	_tidy_btn.pressed.connect(_on_tidy)
+	left.add_child(_tidy_btn)
+
 
 func _build_display(parent: HBoxContainer) -> void:
 	# 中间这块是"席位主窗口"：顶部数据标签栏 + 下方当前页
@@ -603,6 +612,30 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_reissue_btn = _action_button("重发许可", AtcTheme.C_WARM)
 	_reissue_btn.pressed.connect(_on_reissue)
 	rb_actions.add_child(_reissue_btn)
+
+	# 移交地面检查清单（规范 §7.1）：五项全满足才让移交
+	_handoff_card = PanelContainer.new()
+	var hsb := StyleBoxFlat.new()
+	hsb.bg_color = Color(1, 1, 1, 0.03)
+	hsb.border_color = AtcTheme.C_ACCENT_DIM
+	hsb.set_border_width_all(1)
+	hsb.set_corner_radius_all(3)
+	hsb.content_margin_left = 14
+	hsb.content_margin_right = 14
+	hsb.content_margin_top = 10
+	hsb.content_margin_bottom = 10
+	_handoff_card.add_theme_stylebox_override("panel", hsb)
+	_handoff_card.visible = false
+	right.add_child(_handoff_card)
+	var hcol := VBoxContainer.new()
+	hcol.add_theme_constant_override("separation", 5)
+	_handoff_card.add_child(hcol)
+	hcol.add_child(_label("移交地面检查", 12, 700, AtcTheme.C_ACCENT))
+	_handoff_grid = GridContainer.new()
+	_handoff_grid.columns = 2
+	_handoff_grid.add_theme_constant_override("h_separation", 12)
+	_handoff_grid.add_theme_constant_override("v_separation", 4)
+	hcol.add_child(_handoff_grid)
 
 	# 底部留白把机场信息卡顶到最下面，跟真实席位的固定信息区一样
 	var filler := Control.new()
@@ -923,7 +956,10 @@ func _refresh_list() -> void:
 			waiting.append(f)
 
 	_pending_count.text = str(pend.size())
-	_done_count.text = "已放行 %d 架 · 已移交 %d 架" % [desk.cleared_count, desk.handed_off_count()]
+	var rep := desk.score_report()
+	_done_count.text = "已放行 %d 架 · 已移交 %d 架 · 评分 %d (%s)" % [
+		desk.cleared_count, desk.handed_off_count(), int(rep.total),
+		String(rep.grade)]
 
 	if pend.is_empty() and waiting.is_empty():
 		var empty := _label("暂无待放行航班", 13, 400, AtcTheme.C_TEXT_FAINT)
@@ -1147,7 +1183,7 @@ func _refresh_detail() -> void:
 		_issue_btn.disabled = need_check or need_qnh
 	elif f.state == Flight.State.CLEARED and not f.handed_off:
 		_issue_btn.text = "移交给地面席"
-		_issue_btn.disabled = false
+		_issue_btn.disabled = not desk.handoff_ready(f)
 	elif f.state == Flight.State.CLEARED and f.handed_off:
 		_issue_btn.text = "已移交地面"
 		_issue_btn.disabled = true
@@ -1201,6 +1237,7 @@ func _refresh_detail() -> void:
 			str(desk.field.get("atis_alpha", "A"))
 
 	_update_preview()
+	_refresh_handoff(f)
 
 
 func _select_item(opt: OptionButton, index: int) -> void:
@@ -1208,8 +1245,80 @@ func _select_item(opt: OptionButton, index: int) -> void:
 		opt.selected = index
 
 
-# ---------------------------------------------------------------- 复诵核对（规范 §6）
+# ---------------------------------------------------------------- 移交地面（规范 §7）
 
+func _refresh_handoff(f: Flight) -> void:
+	if _handoff_card == null:
+		return
+	var show := desk.enable_handoff_check \
+		and f.state == Flight.State.CLEARED and not f.handed_off
+	_handoff_card.visible = show
+	if not show:
+		return
+	for c in _handoff_grid.get_children():
+		c.queue_free()
+	for it in desk.handoff_checklist(f):
+		var d: Dictionary = it
+		var ok := bool(d.ok)
+		var key := String(d.key)
+		_handoff_grid.add_child(_label(String(d.label), 12, 500,
+			AtcTheme.C_TEXT_SOFT if ok else AtcTheme.C_DANGER))
+		if desk.handoff_hard:
+			var confirmed: bool = f.handoff_confirmed.has(key)
+			var b := Button.new()
+			b.text = "已确认" if confirmed else ("确认" if ok else "不满足")
+			b.disabled = confirmed or not ok
+			b.focus_mode = Control.FOCUS_NONE
+			b.custom_minimum_size = Vector2(76.0 * AtcTheme.UI_SCALE,
+				24.0 * AtcTheme.UI_SCALE)
+			b.add_theme_font_override("font", AtcTheme.font(600))
+			b.add_theme_font_size_override("font_size", AtcTheme.fs(12))
+			b.add_theme_color_override("font_color",
+				AtcTheme.C_ACCENT if confirmed else AtcTheme.C_TEXT_SOFT)
+			b.add_theme_color_override("font_disabled_color",
+				Color(0.55, 0.60, 0.62, 0.5))
+			var n := StyleBoxFlat.new()
+			n.bg_color = Color(1, 1, 1, 0.05)
+			n.border_color = Color(1, 1, 1, 0.14)
+			n.set_border_width_all(1)
+			n.set_corner_radius_all(2)
+			b.add_theme_stylebox_override("normal", n)
+			b.add_theme_stylebox_override("disabled", n)
+			var h := n.duplicate() as StyleBoxFlat
+			h.bg_color = Color(1, 1, 1, 0.12)
+			b.add_theme_stylebox_override("hover", h)
+			b.pressed.connect(_on_confirm_handoff.bind(key))
+			_handoff_grid.add_child(b)
+		else:
+			_handoff_grid.add_child(_label("✓" if ok else "✕", 12, 700,
+				AtcTheme.C_ACCENT if ok else AtcTheme.C_DANGER))
+
+
+func _on_confirm_handoff(key: String) -> void:
+	if desk == null or _selected == "":
+		return
+	var r := desk.confirm_handoff_item(_selected, key)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	refresh()
+
+
+func _on_tidy() -> void:
+	if desk == null:
+		return
+	var r := desk.tidy_strips(now)
+	if not bool(r.ok):
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_WARM)
+		return
+	refresh()
+	_hint.text = "进程单已按计划时刻整理"
+	_hint.add_theme_color_override("font_color", AtcTheme.C_ACCENT)
+
+
+# ---------------------------------------------------------------- 复诵核对（规范 §6）
 ## 逐项比对表：简易模式直接给结论，高阶模式只给"未核对"，让玩家自己判。
 func _refresh_readback_table(f: Flight) -> void:
 	if _rb_grid == null:
