@@ -107,6 +107,13 @@ func apply_airport(data: Dictionary, seed_plan: bool = true) -> void:
 	if delivery == null:
 		return
 	delivery.apply_field(data)
+	# 本席位的三道关：机组报没报通播、计划有没有核对、审查走不走完整流程。
+	# 放在 seed_plan 判断之前——读档进来时同样要生效。
+	delivery.enable_atis_check = true
+	delivery.enable_strip_check = true
+	delivery.enable_plan_review = true
+	if delivery.difficulty == "":
+		delivery.difficulty = "normal"
 	if not seed_plan:
 		return
 	var raw: Variant = data.get("schedule", [])
@@ -122,8 +129,6 @@ func apply_airport(data: Dictionary, seed_plan: bool = true) -> void:
 	delivery.cleared_count = 0
 	delivery.reissue_total = 0
 	delivery.misjudge_count = 0
-	delivery.enable_atis_check = true
-	delivery.enable_strip_check = true
 	delivery.seed_initial(state.sim_time, mini(2, arr.size()))
 ## 推进时钟。暂停时不走。
 func tick(delta: float) -> void:

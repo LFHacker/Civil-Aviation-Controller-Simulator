@@ -57,6 +57,23 @@ var readback_ok := true
 var readback_diff := ""   # 不一致时的人话描述
 var readback_at := 0.0    # 预计复诵到达的仿真时刻
 
+## ---- 飞行计划原值：放行前要与"当前有效值"逐项对照（放行机制规范 §1.2）----
+var plan_origin := ""      # 计划起飞机场
+var plan_route := ""       # 计划航路
+var plan_type := ""        # 计划机型
+var plan_wake := ""        # 计划尾流类别
+var plan_alternate := ""   # 计划备降场
+var plan_alt_m := 0        # 计划初始高度（米）
+var plan_tow_t := 0        # 起飞重量（吨，只显示）
+var plan_endurance := ""   # 续航时间（只显示）
+
+## 审查处置结果：字段 key → PlanReview 的处置状态
+var review := {}
+## 审查是否已经走到"完成审查"
+var review_done := false
+## 高阶模式下带着漏检完成审查的次数（进运行品质评分）
+var missed_review := 0
+
 ## 统计
 var reissue_count := 0
 
@@ -90,6 +107,17 @@ func to_dict() -> Dictionary:
 		"readback_diff": readback_diff,
 		"readback_at": readback_at,
 		"reissue_count": reissue_count,
+		"plan_origin": plan_origin,
+		"plan_route": plan_route,
+		"plan_type": plan_type,
+		"plan_wake": plan_wake,
+		"plan_alternate": plan_alternate,
+		"plan_alt_m": plan_alt_m,
+		"plan_tow_t": plan_tow_t,
+		"plan_endurance": plan_endurance,
+		"review": review.duplicate(),
+		"review_done": review_done,
+		"missed_review": missed_review,
 	}
 
 
@@ -122,16 +150,48 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.readback_diff = str(d.get("readback_diff", ""))
 	f.readback_at = float(d.get("readback_at", 0.0))
 	f.reissue_count = int(d.get("reissue_count", 0))
+	f.plan_origin = str(d.get("plan_origin", ""))
+	f.plan_route = str(d.get("plan_route", ""))
+	f.plan_type = str(d.get("plan_type", ""))
+	f.plan_wake = str(d.get("plan_wake", ""))
+	f.plan_alternate = str(d.get("plan_alternate", ""))
+	f.plan_alt_m = int(d.get("plan_alt_m", 0))
+	f.plan_tow_t = int(d.get("plan_tow_t", 0))
+	f.plan_endurance = str(d.get("plan_endurance", ""))
+	var rv: Variant = d.get("review", {})
+	f.review = rv if rv is Dictionary else {}
+	f.review_done = bool(d.get("review_done", false))
+	f.missed_review = int(d.get("missed_review", 0))
 	return f
 
 
+## 放行环节的完整状态（《放行管制机制规范》§0.2 的七态）：
+## 等待申请 → 已申请 → 计划已审查 → 许可已发布 → 复诵待确认 → 复诵已确认 → 已移交地面
+## 内部仍用 4 个枚举 + checked/handed_off 两个标记表示，这里换算成规范口径的序号，
+## 免得为了"看起来有七态"去改一遍所有调用点（改枚举会波及存档与全部测试）。
+static func flow_of(state_v: int, checked_v: bool, handed_off_v: bool) -> int:
+	if state_v == State.SENT:
+		return 4
+	if state_v == State.READBACK:
+		return 5
+	if state_v == State.CLEARED:
+		return 7 if handed_off_v else 6
+	return 3 if checked_v else 2
+
+
+func flow_state() -> int:
+	return flow_of(state, checked, handed_off)
+
+
 func state_text() -> String:
-	match state:
-		State.PENDING: return "等待放行"
-		State.SENT: return "许可已发"
-		State.READBACK: return "等待复核"
-		State.CLEARED: return "已放行"
-		_: return "未知"
+	match flow_state():
+		2: return "已申请"
+		3: return "计划已审查"
+		4: return "许可已发布"
+		5: return "复诵待确认"
+		6: return "复诵已确认"
+		7: return "已移交地面"
+		_: return "等待申请"
 
 
 ## 放行环节是否已经处理完（列表可以把它归到"已完成"）。

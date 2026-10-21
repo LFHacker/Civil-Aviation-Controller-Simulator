@@ -75,6 +75,18 @@ const ATIS_MISSING_RATE := 0.25
 ## 真实放行席必须先核对飞行计划与进程单；默认关闭让单元测试照旧。
 var enable_strip_check := false
 
+## 是否启用「审查飞行计划」窗口那套完整流程（字段对照 + 三种处置）。
+## 关闭时仍可用 check_plan() 的一键核对，行为与旧版一致。
+var enable_plan_review := false
+
+## 计划审查的参照数据：机型库 / 航路结构 / 可用备降场 / 管制协议高度带
+var review_ref := {}
+## 难度："easy" / "normal" / "hard"（规范 §0.3）
+var difficulty := "normal"
+
+## 进行中的「协调修改」：key 为 "呼号|字段"，value 为 {"ready_at": 秒}
+var _coord := {}
+
 ## 调试用：置 true 后下一次复诵必定读错。给人工/自动化验证"复诵不一致"分支用。
 var force_error_next := false
 
@@ -118,6 +130,23 @@ func spawn_request(sim_time: float, callsign: String = "") -> Flight:
 	f.clearance_limit = f.destination
 	f.route = str(SID_ROUTES.get(f.sid, ""))
 	f.dep_freq = str(field.get("dep_freq", ""))
+
+	# 飞行计划原值：审查窗口拿它跟"当前有效值"逐项对照。
+	# 计划里能写错的地方（尾流、备降场）照抄计划，写没写就按机型库补，
+	# 让"计划值 vs 当前有效值"有真实的差异来源，而不是写死几行假数据。
+	f.plan_origin = str(field.get("airport_id", ""))
+	f.plan_route = f.route
+	f.plan_type = f.type
+	var pw := str(pe.get("wake", ""))
+	f.plan_wake = pw if pw != "" else PlanReview.wake_of(_types_ref(), f.type)
+	var pa := str(pe.get("alternate", ""))
+	f.plan_alternate = pa if pa != "" else _pick_alternate()
+	f.plan_alt_m = f.initial_alt_m
+	var tw := int(pe.get("tow_t", 0))
+	f.plan_tow_t = tw if tw > 0 else int(_type_info(f.type).get("tow_t", 0))
+	var en := str(pe.get("endurance", ""))
+	f.plan_endurance = en if en != "" else str(_type_info(f.type).get("endurance", ""))
+
 	# 机组首次呼叫有没有报"已收到通播"——真实里这是要抓的
 	if enable_atis_check:
 		f.atis_ok = rng.randf() >= ATIS_MISSING_RATE
@@ -152,7 +181,10 @@ func apply_field(data: Dictionary) -> void:
 		"dep_freq": AirportData.frequency(data, "approach"),
 		"ground_freq": AirportData.frequency(data, "ground"),
 		"clock_start": str(data.get("clock_start", "0000")),
+		"airport_id": str(data.get("icao", "")),
 	}
+	var rr: Variant = data.get("review_ref", {})
+	review_ref = rr if rr is Dictionary else {}
 
 
 ## 取走计划里的下一条；没有计划或已用完时返回空字典。
@@ -181,6 +213,8 @@ func _stand_taken(stand: String) -> bool:
 
 
 ## 核对飞行计划（进程单上的第一道工序）。
+## 这是"一键核对"的旧路径，保留给关闭审查窗口时用；开启完整流程后
+## 由 finish_review() 承担（两者都会把 checked 置起来，状态口径一致）。
 func check_plan(callsign: String, sim_time: float) -> Dictionary:
 	var f := get_flight(callsign)
 	if f == null:
@@ -190,9 +224,163 @@ func check_plan(callsign: String, sim_time: float) -> Dictionary:
 	if f.state != Flight.State.PENDING:
 		return {"ok": false, "error": "%s 已进入放行流程，不能再核对计划" % callsign}
 	f.checked = true
+	f.review_done = true
 	f.t_check = sim_time
 	_log(sim_time, "system", "%s 飞行计划已与进程单核对一致。" % f.callsign)
 	return {"ok": true, "error": ""}
+
+
+# ---------------------------------------------------------------- 审查飞行计划
+
+## 该航班的对照行（已叠上玩家此前的处置结果）。
+func review_rows(callsign: String) -> Array:
+	var f := get_flight(callsign)
+	if f == null:
+		return []
+	var ref := review_ref.duplicate()
+	ref["airport_id"] = str(field.get("airport_id", ""))
+	return PlanReview.with_decisions(PlanReview.rows(f, ref), f.review)
+
+
+## 还有几项没处置（界面用来决定"完成审查"是否可点）。
+func review_blocking(callsign: String) -> bool:
+	return PlanReview.has_blocking(review_rows(callsign), difficulty)
+
+
+## 处置一：按当前有效值修正计划（规范 §1.4「修正计划」）。
+func fix_review_row(callsign: String, key: String, sim_time: float) -> Dictionary:
+	var g := _review_guard(callsign, key)
+	if not bool(g.ok):
+		return g
+	var f := get_flight(callsign)
+	_apply_current(f, key)
+	f.review[key] = PlanReview.FIXED
+	_log(sim_time, "system", "%s 计划的%s已按当前有效值修正。"
+		% [f.callsign, PlanReview.label_of(key)])
+	return {"ok": true, "error": ""}
+
+
+## 处置二：协调修改（规范 §1.4「协调修改」）——有 5~15 秒延迟，
+## 真正的改动在 tick() 里落地，期间界面显示"协调中"。
+func coordinate_review_row(callsign: String, key: String, sim_time: float) -> Dictionary:
+	var g := _review_guard(callsign, key)
+	if not bool(g.ok):
+		return g
+	var k := "%s|%s" % [callsign, key]
+	if _coord.has(k):
+		return {"ok": false, "error": "该项正在协调中", "ready_at": float(_coord[k].ready_at)}
+	var delay := 5.0 + rng.randf() * 10.0
+	_coord[k] = {"ready_at": sim_time + delay, "callsign": callsign, "key": key}
+	var f := get_flight(callsign)
+	_log(sim_time, "system", "%s 计划的%s正在与相关单位协调…"
+		% [f.callsign, PlanReview.label_of(key)])
+	return {"ok": true, "error": "", "ready_at": sim_time + delay}
+
+
+## 处置三：标记为已审查（有保留，规范 §1.4）。只有玩家判断不影响安全时才能用。
+func waive_review_row(callsign: String, key: String, sim_time: float) -> Dictionary:
+	var g := _review_guard(callsign, key)
+	if not bool(g.ok):
+		return g
+	var f := get_flight(callsign)
+	f.review[key] = PlanReview.WAIVED
+	_log(sim_time, "system", "%s 计划的%s标记为已审查（有保留）。"
+		% [f.callsign, PlanReview.label_of(key)])
+	return {"ok": true, "error": ""}
+
+
+## 完成审查 → 状态推进到「计划已审查」。
+## 有一致性未处置的红项时不允许完成（高阶模式不标红，允许带着漏检完成，
+## 漏检记进 missed_review，最终由运行品质评分承担后果）。
+func finish_review(callsign: String, sim_time: float) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	if f.checked:
+		return {"ok": false, "error": "%s 的计划已经核对过了" % callsign}
+	if f.state != Flight.State.PENDING:
+		return {"ok": false, "error": "%s 已进入放行流程，不能再核对计划" % callsign}
+	var rows := review_rows(callsign)
+	if PlanReview.has_blocking(rows, difficulty):
+		var n := PlanReview.missed_count(rows)
+		return {"ok": false, "error": "还有 %d 项不一致未处置" % n}
+	var missed := PlanReview.missed_count(rows)
+	f.missed_review += missed
+	f.review_done = true
+	f.checked = true
+	f.t_check = sim_time
+	if missed > 0:
+		_log(sim_time, "system", "%s 计划已审查（有 %d 项未发现的不一致）。"
+			% [f.callsign, missed])
+	else:
+		_log(sim_time, "system", "%s 飞行计划审查完成，与当前有效数据一致。"
+			% f.callsign)
+	return {"ok": true, "error": "", "missed": missed}
+
+
+## 该项是否正在协调中（界面显示「协调中…」）
+func review_coordinating(callsign: String, key: String) -> bool:
+	return _coord.has("%s|%s" % [callsign, key])
+
+
+func _review_guard(callsign: String, key: String) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	if f.state != Flight.State.PENDING:
+		return {"ok": false, "error": "%s 已进入放行流程，不能再改计划" % callsign}
+	if not PlanReview.is_fixable(key):
+		return {"ok": false, "error": "该项只能查看，不能处置"}
+	return {"ok": true, "error": ""}
+
+
+## 把计划值改成"当前有效值"。修正会真的改到航班字段上，
+## 因为高度/航路这些会进放行许可，光在表格里改数字等于没改。
+func _apply_current(f: Flight, key: String) -> void:
+	var types := _types_ref()
+	var routes: Dictionary = review_ref.get("routes", {})
+	var alts: Array = review_ref.get("alternates", [])
+	if key == "airport":
+		f.plan_origin = str(field.get("airport_id", ""))
+	elif key == "route":
+		f.plan_route = str(routes.get(f.sid, f.route))
+		f.route = f.plan_route
+	elif key == "type":
+		f.plan_type = f.type
+	elif key == "wake":
+		f.plan_wake = PlanReview.wake_of(types, f.plan_type)
+	elif key == "alternate":
+		f.plan_alternate = str(alts[0]) if not alts.is_empty() else ""
+	elif key == "altitude":
+		var band := PlanReview.loa_band(review_ref, f.sid)
+		if not band.is_empty():
+			var v := clampi(f.plan_alt_m, int(band.get("alt_min", 0)),
+				int(band.get("alt_max", 0)))
+			f.plan_alt_m = v
+			f.initial_alt_m = v
+			f.plan_alt_m = v
+
+
+func _types_ref() -> Dictionary:
+	var t: Variant = review_ref.get("types", {})
+	return t if t is Dictionary else {}
+
+
+## 机型库里该机型的补充信息（尾流/重量/续航）；没有就返回空字典。
+func _type_info(type_code: String) -> Dictionary:
+	var t: Variant = _types_ref().get(type_code, {})
+	return t if t is Dictionary else {}
+
+
+func _pick_alternate() -> String:
+	var t: Variant = review_ref.get("alternates", [])
+	if t is Array and not (t as Array).is_empty():
+		var arr: Array = t
+		return str(arr[rng.randi_range(0, arr.size() - 1)])
+	return ""
+
+
+# ---------------------------------------------------------------- 移交
 
 
 ## 放行完成后把航班移交给地面席（第二百条（八）：滑行至等待点后转频）。
@@ -478,15 +666,38 @@ func require_atis(callsign: String, sim_time: float) -> Dictionary:
 
 # ---------------------------------------------------------------- 复诵
 
-## 推进时间：到点的复诵自动到达；延误超限的航班通知机组。
+## 推进时间：到点的复诵自动到达；延误超限的航班通知机组；
+## 进行中的「协调修改」到点后落地。
 func tick(sim_time: float) -> void:
 	check_delay_notices(sim_time)
+	_tick_coordination(sim_time)
 	for f in flights:
 		if f.state != Flight.State.SENT:
 			continue
 		if sim_time < f.readback_at:
 			continue
 		_generate_readback(f, sim_time)
+
+
+func _tick_coordination(sim_time: float) -> void:
+	if _coord.is_empty():
+		return
+	var done: Array = []
+	for k in _coord.keys():
+		var rec: Dictionary = _coord[k]
+		if sim_time < float(rec.get("ready_at", 0.0)):
+			continue
+		done.append(k)
+		var f := get_flight(str(rec.get("callsign", "")))
+		if f == null:
+			continue
+		var key := str(rec.get("key", ""))
+		_apply_current(f, key)
+		f.review[key] = PlanReview.FIXED
+		_log(sim_time, "system", "%s 计划的%s协调完成，已按协调结果更新。"
+			% [f.callsign, PlanReview.label_of(key)])
+	for k in done:
+		_coord.erase(k)
 
 
 ## 复诵措辞与放行许可同构，这样"有没有读错"一眼可比。

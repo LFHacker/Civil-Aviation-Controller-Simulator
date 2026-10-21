@@ -12,3 +12,6 @@ build/
 
 # Blender 备份文件
 *.blend1
+
+# 从 docx/ 里抽出来的纯文本副本（阅读用，原始 docx 才是源）
+docx/_extracted/

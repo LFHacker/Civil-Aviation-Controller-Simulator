@@ -46,6 +46,8 @@ var _log_box: VBoxContainer
 var _log_scroll: ScrollContainer
 var _airport: Dictionary = {}
 var _airport_box: VBoxContainer
+## 审查飞行计划窗口（首次打开时才创建）
+var _review_win: PlanReviewWindow
 
 
 func _ready() -> void:
@@ -733,6 +735,8 @@ func tick(sim_time: float) -> void:
 	if desk == null:
 		return
 	var before := _signature()
+	if _review_win != null:
+		_review_win.now = sim_time
 	desk.maybe_spawn(sim_time)
 	desk.tick(sim_time)
 	if _tabs != null:
@@ -832,6 +836,8 @@ func _flight_card(f: Flight) -> Control:
 
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 2)
+	# 子容器默认 STOP 会吞掉点击，卡片本身的 gui_input 就收不到（选不中航班）
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(col)
 
 	var head := HBoxContainer.new()
@@ -871,7 +877,7 @@ func _flight_card(f: Flight) -> Control:
 	if desk != null and desk.enable_strip_check and not f.checked \
 			and f.state == Flight.State.PENDING:
 		var btn := Button.new()
-		btn.text = "核对计划"
+		btn.text = "审查飞行计划" if desk.enable_plan_review else "核对计划"
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.custom_minimum_size = Vector2(0, 24)
 		btn.add_theme_font_override("font", AtcTheme.font(500))
@@ -900,6 +906,10 @@ func _stamp_text(f: Flight) -> String:
 
 
 func _on_check_plan(callsign: String) -> void:
+	# 开启完整审查流程时，这里是"打开审查窗口"；关闭时保持原来的一键核对。
+	if desk != null and desk.enable_plan_review:
+		_open_review(callsign)
+		return
 	var r := desk.check_plan(callsign, now)
 	if not r.ok:
 		refresh()
@@ -907,6 +917,23 @@ func _on_check_plan(callsign: String) -> void:
 		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 		return
 	refresh()
+
+
+## 审查飞行计划窗口：挂在最近的 CanvasLayer 上（和下拉菜单同一套做法），
+## 这样它能盖住顶栏，看起来才像"新开了一个窗口"。
+func _open_review(callsign: String) -> void:
+	if _review_win == null:
+		var host: Node = get_parent()
+		while host != null and not (host is CanvasLayer):
+			host = host.get_parent()
+		if host == null:
+			host = get_tree().root
+		_review_win = PlanReviewWindow.new()
+		_review_win.name = "PlanReviewWindow"
+		_review_win.changed.connect(func() -> void: refresh())
+		host.add_child(_review_win)
+	_review_win.now = now
+	_review_win.open(desk, callsign)
 
 
 ## 用 if 而不是 match：GDScript 对 match 分支的"返回值完整性"检查很保守。
