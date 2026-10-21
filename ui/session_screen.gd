@@ -257,6 +257,7 @@ const OPT_EXIT := 3
 ## 100+ = 难度；200+ = 许可发布模式
 const OPT_DIFF := 100
 const OPT_MODE := 200
+const OPT_CAND := 300
 const DIFF_NAMES := ["简易", "进阶", "高阶"]
 const DIFF_KEYS := ["easy", "normal", "hard"]
 const MODE_NAMES := ["预设一键", "填空式", "自由文本"]
@@ -267,6 +268,7 @@ var _options_panel: PanelContainer
 var _opt_pause_btn: Button
 var _opt_diff_buttons: Array = []
 var _opt_mode_buttons: Array = []
+var _opt_cand_btn: Button
 
 
 func _build_options_menu() -> void:
@@ -321,6 +323,8 @@ func _build_options_menu() -> void:
 		var b := _option_button("", OPT_MODE + i)
 		col.add_child(b)
 		_opt_mode_buttons.append(b)
+	_opt_cand_btn = _option_button("", OPT_CAND)
+	col.add_child(_opt_cand_btn)
 	col.add_child(_option_divider())
 	col.add_child(_option_button("返回主菜单    ESC", OPT_EXIT))
 
@@ -397,6 +401,15 @@ func _refresh_option_texts() -> void:
 	for i in range(_opt_mode_buttons.size()):
 		var mark2 := "● " if MODE_KEYS[i] == mode else "○ "
 		_opt_mode_buttons[i].text = mark2 + MODE_NAMES[i]
+	if _opt_cand_btn != null:
+		var cand := d != null and d.candidate_error
+		_opt_cand_btn.text = ("☑ " if cand else "☐ ") + "含错误候选"
+
+
+## 难度/模式/候选开关变了，席位面板要重画（候选列表、哪个控件可见都跟着变）
+func _refresh_seat_panel() -> void:
+	if _seat_panel != null and _seat_panel.has_method("refresh"):
+		_seat_panel.call("refresh")
 
 
 ## 选项面板里的小标题
@@ -441,6 +454,7 @@ func _save_game_settings() -> void:
 	cfg.load("user://settings.cfg")
 	cfg.set_value("game", "difficulty", session.delivery.difficulty)
 	cfg.set_value("game", "issue_mode", session.delivery.issue_mode)
+	cfg.set_value("game", "candidate_error", session.delivery.candidate_error)
 	cfg.save("user://settings.cfg")
 
 
@@ -454,18 +468,29 @@ func _load_game_settings() -> void:
 	var d := session.delivery
 	d.difficulty = str(cfg.get_value("game", "difficulty", d.difficulty))
 	d.issue_mode = str(cfg.get_value("game", "issue_mode", d.issue_mode))
+	d.candidate_error = bool(cfg.get_value("game", "candidate_error", d.candidate_error))
 	d.readback_hard = d.difficulty == "hard"
 	d.handoff_hard = d.difficulty == "hard"
 
 
 func _on_option_selected(id: int) -> void:
+	if id == OPT_CAND:
+		if session != null and session.delivery != null:
+			session.delivery.candidate_error = not session.delivery.candidate_error
+			_save_game_settings()
+			_refresh_seat_panel()
+		_options_layer.visible = false
+		_on_options_pressed()
+		return
 	if id >= OPT_MODE:
 		_set_issue_mode(id - OPT_MODE)
+		_refresh_seat_panel()
 		_options_layer.visible = false
 		_on_options_pressed()
 		return
 	if id >= OPT_DIFF:
 		_set_difficulty(id - OPT_DIFF)
+		_refresh_seat_panel()
 		_options_layer.visible = false
 		_on_options_pressed()
 		return

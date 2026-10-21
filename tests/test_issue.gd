@@ -18,6 +18,7 @@ func _initialize() -> void:
 	_test_free_text()
 	_test_squawk_scan()
 	_test_dep_info()
+	_test_incomplete_query()
 	_test_serialize()
 	print("")
 	print("────────────────────────────")
@@ -169,6 +170,40 @@ func _item(list: Array, key: String) -> Dictionary:
 		if String((it as Dictionary).key) == key:
 			return it
 	return {}
+
+
+func _test_incomplete_query() -> void:
+	_section("许可不完整 → 机组质疑（07 §4.4）")
+	# 进阶模式：缺离场程序交给机组质疑，而不是管制端直接拒
+	var d := _desk()
+	d.pilot_check_enabled = true
+	d.difficulty = "normal"
+	var f := d.get_flight("ISS001")
+	var r := d.issue_free_text("ISS001",
+		"ISS001，许可放行至 ZBAA，初始高度 6000 米，应答机 4321，修正海压 1013。", 0.0)
+	_check(bool(r.get("queried", false)), "机组质疑而不是直接拒", String(r.error))
+	_check(String(r.error).contains("许可不完整"), "质疑内容是「许可不完整」",
+		String(r.error))
+	_check(String(r.error).contains("离场程序"), "点名缺离场程序", String(r.error))
+	_check(f.state == Flight.State.PENDING, "状态没有推进", str(f.state))
+	_check(f.pilot_queries == 1, "质疑计数 +1", str(f.pilot_queries))
+
+	# 简易模式：不质疑，直接由管制端提示缺项
+	var e := _desk()
+	e.pilot_check_enabled = true
+	e.difficulty = "easy"
+	var r2 := e.issue_free_text("ISS001",
+		"ISS001，许可放行至 ZBAA，初始高度 6000 米，应答机 4321，修正海压 1013。", 0.0)
+	_check(not bool(r2.get("queried", false)), "简易模式不质疑")
+	_check(not bool(r2.ok), "简易模式直接提示缺项", String(r2.error))
+
+	# 缺修正海压永远是硬错误，不交给机组
+	var d3 := _desk()
+	d3.pilot_check_enabled = true
+	var r3 := d3.issue_free_text("ISS001",
+		"ISS001，许可放行至 ZBAA，按 RUMUK 8D 离场，初始高度 6000 米，应答机 4321。", 0.0)
+	_check(not bool(r3.ok), "缺 QNH 直接拒绝", String(r3.error))
+	_check(String(r3.error).contains("修正海压"), "提示缺修正海压", String(r3.error))
 
 
 func _test_serialize() -> void:

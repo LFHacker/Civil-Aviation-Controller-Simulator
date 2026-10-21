@@ -234,7 +234,7 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 - 复诵待确认：复诵正确 / 复诵有误重发
 - 已放行：联系地面 121.750
 
-candidate_error 开关（08 §2.4）打开后，候选里会混一条**修正海压写错**的，
+「选项 → 含错误候选」打开后（08 §2.4，默认关闭），候选里会混一条**修正海压写错**的，
 选错会被机组质疑——让简易模式也有判断压力。
 
 **标准读法（MH/T 4014）** 在 sim/radio.gd：1200 → 幺两洞洞、7/9 → 拐/勾、
@@ -536,7 +536,7 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # AI 驾驶舱（质疑/重申请/错误注入/种子）：32 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_pilot.gd
 
-# 许可三模式 / 离场情报：35 项断言
+# 许可三模式 / 离场情报 / 不完整质疑：44 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_issue.gd
 
 # 移交清单 / 整理进程单 / 评分：47 项断言
@@ -566,7 +566,7 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 
 ## 当前状态
 
-v0.1.10
+v0.1.11
 
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
@@ -596,7 +596,7 @@ v0.0.2     已固定，不再改动
 v0.1.0     已固定，不再改动
 v0.1.1     已固定，不再改动
 v0.1.2     已固定，不再改动
-v0.1.10     已固定，不再改动
+v0.1.11     已固定，不再改动
 ```
 
 版本号只有一个来源：`core/version.gd` 里的 `MAJOR / MINOR / PATCH`。

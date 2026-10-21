@@ -1307,6 +1307,10 @@ func issue_preset(callsign: String, sim_time: float) -> Dictionary:
 
 ## 自由文本模式：用关键词 + 数值把七项要素抠出来再校验（规范 §5.1 模式 C）。
 ## 语音识别不在这一步；ASR 转成文本之后走的也是这条路径。
+##
+## 缺项分两类（07 §4.4）：
+##   · 呼号 / 放行界限 / 修正海压 —— 管制侧直接拒绝（打错飞机、漏 QNH 都是硬错误）
+##   · 离场程序 / 初始高度 / 应答机 —— 进阶及以上交给机组质疑"许可不完整，请重复"
 func issue_free_text(callsign: String, text: String, sim_time: float) -> Dictionary:
 	var f := get_flight(callsign)
 	if f == null:
@@ -1319,26 +1323,42 @@ func issue_free_text(callsign: String, text: String, sim_time: float) -> Diction
 	var limit := f.clearance_limit if f.clearance_limit != "" else f.destination
 	if limit != "" and not t.contains(limit):
 		return {"ok": false, "error": "缺少放行界限 %s" % limit}
+	var qnh := int(field.get("qnh", 0))
+	if qnh > 0 and not t.contains(str(qnh)):
+		return {"ok": false, "error": "缺少修正海压 %d" % qnh}
+
+	var missing: Array = []
 	var sid := ""
 	for s in SIDS:
 		if t.contains(s):
 			sid = s
 			break
 	if sid == "":
-		return {"ok": false, "error": "没有识别到离场程序"}
+		missing.append("离场程序")
 	var alt := 0
 	for a in ALT_OPTIONS:
 		if t.contains(str(a)):
 			alt = a
 			break
 	if alt == 0:
-		return {"ok": false, "error": "没有识别到初始高度"}
+		missing.append("初始高度")
 	var sq := find_squawk_in_text(t, alt)
 	if sq == "":
-		return {"ok": false, "error": "没有识别到应答机编码"}
-	var qnh := int(field.get("qnh", 0))
-	if qnh > 0 and not t.contains(str(qnh)):
-		return {"ok": false, "error": "缺少修正海压 %d" % qnh}
+		missing.append("应答机编码")
+
+	if not missing.is_empty():
+		# 进阶/高阶：机组质疑"许可不完整"，状态不动，玩家补全后重发
+		if pilot_check_enabled and difficulty != "easy":
+			f.pilot_queries += 1
+			_log(sim_time, "atc", t)
+			_log(sim_time, "pilot",
+				"%s，许可不完整，请重复。" % f.callsign)
+			return {"ok": true, "queried": true,
+				"error": "机组质疑：许可不完整，请重复（缺 %s）"
+					% "、".join(PackedStringArray(missing))}
+		return {"ok": false, "error": "缺少 %s"
+			% "、".join(PackedStringArray(missing))}
+
 	return issue_clearance(callsign, sid, alt, sq, sim_time)
 
 
