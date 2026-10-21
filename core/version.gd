@@ -4,7 +4,7 @@ extends RefCounted
 
 const MAJOR := 0
 const MINOR := 1
-const PATCH := 8
+const PATCH := 9
 
 const CODENAME := "radar"
 

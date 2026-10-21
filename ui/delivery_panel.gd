@@ -34,6 +34,8 @@ var _qnh_btn: Button
 var _atis_state_label: Label
 var _atis_lamp: Label
 var _atis_update_btn: Button
+var _atis_edit_btn: Button
+var _atis_editor: AtisEditor
 var _atis_fix_row: HBoxContainer
 var _atis_notify_btn: Button
 var _atis_report_btn: Button
@@ -730,6 +732,12 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_atis_update_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
 	_atis_update_btn.pressed.connect(_on_update_atis)
 	atis_col.add_child(_atis_update_btn)
+
+	# 编辑通播（规范 §3.2）：可逐项选值，选错就会传导成特情
+	_atis_edit_btn = _action_button("编辑通播…", AtcTheme.C_TEXT_SOFT)
+	_atis_edit_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
+	_atis_edit_btn.pressed.connect(_on_edit_atis)
+	atis_col.add_child(_atis_edit_btn)
 
 	_atis_fix_row = HBoxContainer.new()
 	_atis_fix_row.add_theme_constant_override("separation", 8)
@@ -1518,6 +1526,27 @@ func _on_update_atis() -> void:
 		"（要素与实况不符，注意）" if bool(r.get("has_error", false)) else ""]
 	_hint.add_theme_color_override("font_color",
 		AtcTheme.C_DANGER if bool(r.get("has_error", false)) else AtcTheme.C_ACCENT)
+
+
+func _on_edit_atis() -> void:
+	if desk == null:
+		return
+	if _atis_editor == null:
+		var host: Node = get_parent()
+		while host != null and not (host is CanvasLayer):
+			host = host.get_parent()
+		if host == null:
+			host = get_tree().root
+		_atis_editor = AtisEditor.new()
+		_atis_editor.name = "AtisEditor"
+		_atis_editor.published.connect(func(alpha: String, has_error: bool) -> void:
+			refresh()
+			_hint.text = "通播 %s 已发布%s" % [
+				alpha, "（要素与实况不符，注意特情）" if has_error else ""]
+			_hint.add_theme_color_override("font_color",
+				AtcTheme.C_DANGER if has_error else AtcTheme.C_ACCENT))
+		host.add_child(_atis_editor)
+	_atis_editor.open(desk, now)
 
 
 func _on_notify_atis() -> void:

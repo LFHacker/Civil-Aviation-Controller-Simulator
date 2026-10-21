@@ -85,6 +85,11 @@ var last_request_at := 0.0
 ## 三次申请都没人理 → 机组不再主动呼叫
 var pilot_waiting := false
 
+## 放行时引用的通播与实况不符（规范 §3.4：可能引发特情）
+var atis_suspect := false
+## 已经发生的特情描述；空串表示正常
+var emergency := ""
+
 ## ---- 飞行计划原值：放行前要与"当前有效值"逐项对照（放行机制规范 §1.2）----
 var plan_origin := ""      # 计划起飞机场
 var plan_route := ""       # 计划航路
@@ -189,6 +194,8 @@ func to_dict() -> Dictionary:
 		"request_count": request_count,
 		"last_request_at": last_request_at,
 		"pilot_waiting": pilot_waiting,
+		"atis_suspect": atis_suspect,
+		"emergency": emergency,
 		"atis_notified": atis_notified,
 	}
 
@@ -261,6 +268,8 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.request_count = int(d.get("request_count", 1))
 	f.last_request_at = float(d.get("last_request_at", 0.0))
 	f.pilot_waiting = bool(d.get("pilot_waiting", false))
+	f.atis_suspect = bool(d.get("atis_suspect", false))
+	f.emergency = str(d.get("emergency", ""))
 	return f
 
 

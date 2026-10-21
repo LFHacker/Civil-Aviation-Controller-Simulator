@@ -107,6 +107,9 @@ var atis_expired := false
 ## 由 tick 维护：实况与通播相比是否触发了"重大变化"
 var atis_major := ""
 
+## 通播有误的航班放行后多久暴露出特情（仿真秒）
+const EMERGENCY_DELAY := 45.0
+
 ## ---- 复诵核对（规范 §6）----
 ## true = 高阶模式：系统不高亮不一致项，玩家逐项自己判，还有 60 秒时限
 var readback_hard := false
@@ -532,6 +535,10 @@ func score_report() -> Dictionary:
 	if dep_skip > 0:
 		_add_line(lines, "离场情报漏报 %d 项" % dep_skip, -dep_skip)
 		total -= dep_skip
+	if emergency_count > 0:
+		_add_line(lines, "通播有误导致特情 %d 起" % emergency_count,
+			-5 * emergency_count)
+		total -= 5 * emergency_count
 
 	return {"total": total, "grade": _grade(total), "lines": lines}
 
@@ -693,6 +700,95 @@ func send_candidate(callsign: String, cand_id: String, sim_time: float) -> Dicti
 			_log(sim_time, "atc", text)
 			_log(sim_time, "pilot", "%s，收到，稍等。" % f.callsign)
 			return {"ok": true, "error": ""}
+
+
+## 通播与实况不符导致机组出特情的次数（进评分）
+var emergency_count := 0
+
+## 通播编辑界面的可选项（规范 §3.2）。每项给出"当前值 + 邻近值"，
+## 玩家选到非当前值就是"通播有误"——这是特情的来源之一。
+func atis_edit_options() -> Dictionary:
+	var qnh := int(field.get("qnh", 0))
+	var rwy := str(field.get("runway", ""))
+	var wind := str(field.get("wind", ""))
+	var vis := str(field.get("visibility", ""))
+	var tl := atis.transition_level if atis.transition_level != "" else "3600"
+	return {
+		"alpha": AtisBroadcast.next_alpha(atis.alpha),
+		"runway": [rwy, _flip_runway(rwy)],
+		"transition_level": [tl, "3000", "3600", "4200"],
+		"wind": [wind, _shift_wind(wind, 20), _shift_wind(wind, -20)],
+		"visibility": [vis, "3000M", "1500M", "500M"],
+		"qnh": [qnh, qnh - 1, qnh + 1, qnh + 5],
+		"brake": ["良好", "中等", "偏差"],
+		"hazards": ["风切变", "雷雨", "积冰"],
+	}
+
+
+## 反过来那条跑道（18 ↔ 36）。跑道号是磁航向/10（01–36），不是度数。
+static func _flip_runway(rwy: String) -> String:
+	if rwy == "":
+		return ""
+	var n := int(rwy)
+	if n <= 0 or n > 36:
+		return rwy
+	var f := n + 18 if n <= 18 else n - 18
+	return "%02d" % f
+
+
+## 把风向转一个角度，其余（风速/单位）不变；解析不了就原样返回
+static func _shift_wind(wind: String, delta: float) -> String:
+	var p := Meteo.parse_wind(wind)
+	if not bool(p.get("ok", false)):
+		return wind
+	var dir := fposmod(float(p.get("dir", 0)) + delta, 360.0)
+	return "%03d%02d%s" % [int(dir), int(p.get("speed", 0)),
+		String(p.get("unit", "MPS"))]
+
+
+## 通播有误 → 机组可能出特情（规范 §3.4）。检查在 tick 里推进。
+func _tick_emergency(sim_time: float) -> void:
+	if not enable_atis_lifecycle:
+		return
+	for f in flights:
+		var fl := f as Flight
+		if not fl.atis_suspect or fl.emergency != "":
+			continue
+		if fl.state != Flight.State.SENT and fl.state != Flight.State.READBACK \
+				and fl.state != Flight.State.CLEARED:
+			continue
+		if fl.t_sent < 0.0 or sim_time - fl.t_sent < EMERGENCY_DELAY:
+			continue
+		# 按通播错在哪一项决定特情类型
+		var kind := "高度偏差"
+		if atis.qnh != int(field.get("qnh", 0)):
+			kind = "高度表指示偏差"
+		elif atis.runway != str(field.get("runway", "")):
+			kind = "航向偏差"
+		elif atis.wind != str(field.get("wind", "")):
+			kind = "遭遇风切变未预警"
+		fl.emergency = kind
+		emergency_count += 1
+		_log(sim_time, "pilot",
+			"%s 报告 %s，请求处置。" % [fl.callsign, kind])
+		_log(sim_time, "system",
+			"特情：%s —— 通播要素与实况不符（%s）。" % [fl.callsign, kind])
+
+
+## 复诵到了却一直没人判（规范 §4.7：180 秒后机组不催，只把卡片标成"机组等待中"）
+const READBACK_WAIT := 180.0
+
+
+func _tick_readback_waiting(sim_time: float) -> void:
+	for f in flights:
+		var fl := f as Flight
+		if fl.state != Flight.State.READBACK or fl.pilot_waiting:
+			continue
+		if fl.t_readback < 0.0 or sim_time - fl.t_readback < READBACK_WAIT:
+			continue
+		fl.pilot_waiting = true
+		_log(sim_time, "system", "%s 机组等待中（复诵已到 %d 秒未确认）。" % [
+			fl.callsign, int(sim_time - fl.t_readback)])
 
 
 ## 该项是否正在协调中（界面显示「协调中…」）
@@ -1411,6 +1507,9 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 					f.callsign, f.pilot_queries])
 
 	_eval_slot(f, sim_time)
+	# 这次放行引用的通播如果与实况不符，记下来 —— 之后可能出特情（§3.4）
+	if enable_atis_lifecycle and atis.has_error:
+		f.atis_suspect = true
 	if enable_dep_info:
 		f.dep_info_skipped = dep_info_missing(f)
 	_log(sim_time, "atc", full_clearance_text(f))
@@ -1507,6 +1606,8 @@ func tick(sim_time: float) -> void:
 	_tick_atis(sim_time)
 	_tick_readback_deadline(sim_time)
 	_tick_pilot_requery(sim_time)
+	_tick_emergency(sim_time)
+	_tick_readback_waiting(sim_time)
 	for f in flights:
 		if f.state != Flight.State.SENT:
 			continue
