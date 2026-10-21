@@ -109,6 +109,20 @@ static func parse(text: String, known: Array = []) -> Dictionary:
 		if t.contains(String(sid)):
 			slots["sid"] = String(sid)
 			break
+	# 也可能说的是中文读法（「SASAN五号」），要能翻回工程里的代码「SASAN 5B」。
+	# 注意顺序：先认代码，再认读法，否则 "SASAN" 会把 "SASAN 5B" 判成别的。
+	if not slots.has("sid"):
+		# ⚠️ 规范化会把「SASAN五号」里的"五"变成 5，读法就找不到了。
+		# 所以先按标准读法把阿拉伯数字还原成汉字，再比对读法表。
+		var zh := _spoken_digits(t).replace(" ", "")
+		for code in Voice.SID_TEXT.keys():
+			var spoken := String(Voice.SID_TEXT[code]).replace(" ", "")
+			if spoken != "" and zh.contains(spoken):
+				for sid2 in DeliveryDesk.SIDS:
+					if String(sid2).replace(" ", "") == String(code):
+						slots["sid"] = String(sid2)
+						break
+				break
 	# 初始高度：只在合法高度层里认（避免把应答机读成高度）
 	for a in DeliveryDesk.ALT_OPTIONS:
 		if scan.contains(str(a)):
@@ -120,6 +134,16 @@ static func parse(text: String, known: Array = []) -> Dictionary:
 	if sq != "":
 		slots["squawk"] = sq
 	out["slots"] = slots
+	return out
+
+
+## 阿拉伯数字 → 标准读法汉字（normalize 的反向，用于比对读法表）
+static func _spoken_digits(t: String) -> String:
+	var out := ""
+	for i in range(t.length()):
+		var c := t[i]
+		var idx := "0123456789".find(c)
+		out += Radio.DIGIT_READ[idx] if idx >= 0 else c
 	return out
 
 

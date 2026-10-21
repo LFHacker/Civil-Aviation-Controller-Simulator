@@ -130,6 +130,29 @@ if ($audio.Count -gt 0) {
 
 if (-not $KeepAudio) { Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue }
 
+# ---- 5. 接缝：识别出来的文本，逻辑层能不能解析 ----
+# 这一步单独验，因为"识别对了"和"解析对了"是两件事：
+# 识别器可能回中文数字、全角标点，逻辑层必须能接住（VoiceMode.normalize）。
+Write-Host "· 识别文本 → 逻辑层解析"
+$okLine = $lines | Where-Object { $_ -match '"tag":"v_ok"' } | Select-Object -First 1
+if ($okLine -ne $null) {
+    $mText = [regex]::Match($okLine, '"text":"([^"]+)"')
+    if ($mText.Success) {
+        $recognized = $mText.Groups[1].Value
+        $parsed = & $Godot --headless --path $proj --script res://tools/parse_voice_text.gd -- $recognized 2>&1 | Out-String
+        $mj = [regex]::Match($parsed, "PARSE_JSON:(\{.*\})")
+        Check ($mj.Success) "逻辑层拿到识别文本" $parsed
+        if ($mj.Success) {
+            $o = $mj.Groups[1].Value | ConvertFrom-Json
+            Check ($o.kind -eq "clearance") "判为放行许可通话" $o.kind
+            Check ($o.slots.limit -eq "ZSPD") "认出放行界限" $o.slots.limit
+            Check ($o.slots.sid -eq "SASAN 5B") "认出离场程序" $o.slots.sid
+            Check ([int]$o.slots.alt -eq 6000) "认出初始高度" $o.slots.alt
+            Check ([string]$o.slots.squawk -eq "4215") "认出应答机" $o.slots.squawk
+        }
+    } else { Check $false "识别结果里有文本" $okLine }
+} else { Check $false "找到 v_ok 的识别结果" "没跑音频时跳过" }
+
 Write-Host ""
 Write-Host "----------------------------------------"
 if ($fail -eq 0) { Write-Host ("OK 全部通过：" + $checks + " 项") }

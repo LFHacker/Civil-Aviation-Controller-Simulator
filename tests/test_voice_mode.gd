@@ -90,6 +90,12 @@ func _test_parse() -> void:
 	var p3 := VoiceMode.parse(VoiceMode.normalize("CES5175 许可放行至 浦东"))
 	_check(String((p3.slots as Dictionary).get("limit", "")) == "ZSPD",
 		"认中文机场名", str(p3.slots))
+	# 程序说的是中文读法（SASAN五号）也要能翻回工程代码（SASAN 5B）。
+	# 注意 normalize 会把"五"变成 5，这一步踩过。
+	var p4 := VoiceMode.parse(VoiceMode.normalize(
+		"CES5175 许可放行至浦东 按SASAN五号离场 初始高度6000米"))
+	_check(String((p4.slots as Dictionary).get("sid", "")) == "SASAN 5B",
+		"中文读法能翻回程序代码", str(p4.slots))
 
 
 func _test_decide() -> void:

@@ -260,8 +260,8 @@ const OPT_MODE := 200
 const OPT_CAND := 300
 const DIFF_NAMES := ["简易", "进阶", "高阶"]
 const DIFF_KEYS := ["easy", "normal", "hard"]
-const MODE_NAMES := ["预设一键", "填空式", "自由文本"]
-const MODE_KEYS := ["preset", "form", "text"]
+const MODE_NAMES := ["预设一键", "填空式", "自由文本", "真实语音"]
+const MODE_KEYS := ["preset", "form", "text", "voice"]
 
 var _options_layer: Control
 var _options_panel: PanelContainer

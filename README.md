@@ -251,7 +251,7 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 **教学引导（08 §10）**：Radio.teaching_hint(mode) 按对话模式给一句话提示，
 显示在放行席提示区（"点下面任意一条候选通话即可发出" / "逐项选好…" / "语音档未接入，用文本代替"）。
 
-⚠️ **语音档（08 §4）**：**「听」的处理链路已完整实现并端到端验证**；「说」已备好片段库与生成脚本，等定音色接播放器。
+⚠️ **语音档（08 §4）**：**「听」已接通到面板，玩家可以按住通话键说话**；「说」已备好片段库与生成脚本，等定音色接播放器。
 详见 [docs/voice-design.md](docs/voice-design.md) 与 `docs/audio/` 里的试听样本。
 
 **听（已实现）**——不做开放式听写，而是按当前放行内容**现生成闭集语法**：
@@ -259,13 +259,20 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 | 组件 | 作用 |
 |---|---|
 | `sim/voice_mode.gd` | ASR 转录规范化（「幺两洞洞」→`1200`、「东方五幺拐五」→`CES5175`）、通话类型、要素提取、四种回退语义（发送/没听清/呼号不符/空转录）、五项辅助开关 |
-| `sim/voice_grammar.gd` | 生成 SRGS 语法：正确复诵 1 条 + 五个安全关键项各错一位的变体，每条变体一个 public 规则，**规则名就是"读错了哪一项"** |
+| `sim/voice_grammar.gd` | 生成 SRGS 语法：正确复诵 1 条 + 五个安全关键项各错一位的变体，每条变体一个 public 规则，**规则名就是"读错了哪一项"**；另有 `clearance` 模式给玩家说的许可用 |
+| `sim/voice_asr.gd` | 常驻识别助手的客户端（双向管道 + 协议 + WAV 写入），无头可测 |
+| `ui/voice_input.gd` | 麦克风采集 → 16 kHz 单声道 WAV（表现层，逻辑层不依赖它） |
 | `DeliveryDesk.issue_voice()` | §4.3 三种回退语义：置信度低/解析不出 → **模拟驾驶舱"没听清"重新呼叫**（不是提示玩家重输）；呼号不符 → "呼号不符，请确认" |
 | `DeliveryDesk.apply_voice_readback()` | 变体规则名 → 逐项复诵标记，与玩家手点的 `mark_readback_item()` 落到同一份数据 |
 | `tools/atc-listen/AtcListen.exe` | 常驻识别助手（C# + SAPI，stdin 收命令 / stdout 回 JSON），引擎只初始化一次 |
 
-实测（`tools/test-listen.ps1`，26 项断言全绿）：六个变体全部识别正确，
+**玩法上怎么用**：选项 →「许可发布模式」选 **真实语音**，右栏出现「按下通话」按钮：
+按住说话、松开识别；待复核复诵时同一个键用来识别机组复诵。
+识别不出内容时**不假装成功**，界面与机组回话都按 §4.3 说"没听清，请再说一遍"。
+
+实测（`tools/test-listen.ps1`，32 项断言全绿）：六个变体全部识别正确，
 **38–81 ms、置信度 95.6–99.5%**；对照开放式听写是 1047 ms / 置信度 32% 且完全读错。
+识别出的文本还能被逻辑层正确解析成七项要素（这一步单独验过）。
 
 **说（未接播放器）**——**不按整句合成**（要联网要 key），改成 49 条片段拼装 + 电台滤波
 （窄带 300–2700 Hz + 压限），合计 284 KB / 38 s，运行时零延迟零联网。
@@ -570,11 +577,17 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # 语音片段拼装（说）：37 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice.gd
 
-# 高级模式语音链路（转录规范化/要素/回退语义/闭集语法/语音复诵）：105 项断言
+# 高级模式语音链路（转录规范化/要素/回退语义/闭集语法/语音复诵）：106 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_mode.gd
 
-# 语音识别端到端（真识别引擎，需 Windows + SAPI 中文识别器）：26 项断言
+# 语音识别端到端（真识别引擎 + 真语音，需 Windows + SAPI 中文识别器）：32 项断言
 powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
+
+# 识别助手客户端（WAV 写入 / JSON / 双向管道 / 错误路径，无需麦克风）：23 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_asr.gd
+
+# 语音面板（按住通话回调、模式切换、失败路径，无需真人说话）：17 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_panel.gd
 
 # AI 驾驶舱（质疑/重申请/错误注入/种子）：32 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_pilot.gd
@@ -609,7 +622,7 @@ powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
 
 ## 当前状态
 
-v0.1.13
+v0.1.14
 
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
@@ -624,7 +637,9 @@ v0.1.13
 - **视图菜单**：七块面板单独开关 + 三套布局预设 + 恢复默认布局，状态持久化
 - **窗口菜单**：显示模式 / 窗口尺寸 / 显示器 / 置顶 / 最小化 / 新开一个窗口 / 恢复默认
 - **语音「听」链路**（08 §4）：闭集语法按放行内容现生成 → 变体规则名直接指出读错的项 →
-  落到逐项复诵判定；`tools/test-listen.ps1` 端到端 26 项断言（38–81 ms / 置信度 95.6–99.5%）
+  落到逐项复诵判定；`tools/test-listen.ps1` 端到端 32 项断言（38–81 ms / 置信度 95.6–99.5%）
+- **真实语音模式可玩**（08 §4.2）：选项 → 许可发布模式 →「真实语音」，
+  右栏「按下通话」按住说话、松开识别；麦克风采集 → 16 kHz WAV → 常驻识别助手 → 逐项判定/发放许可
 - `设置` 仍是占位页；席位面板是占位区（下一步）
 
 ---
@@ -643,6 +658,7 @@ v0.1.1     已固定，不再改动
 v0.1.2     已固定，不再改动
 v0.1.12     已固定，不再改动
 v0.1.13     已固定，不再改动
+v0.1.14     已固定，不再改动
 ```
 
 版本号只有一个来源：`core/version.gd` 里的 `MAJOR / MINOR / PATCH`。

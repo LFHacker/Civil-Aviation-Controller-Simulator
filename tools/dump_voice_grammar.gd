@@ -13,7 +13,7 @@ func _initialize() -> void:
 		out_dir = String(argv[0])
 	var param := {
 		"callsign": "CES5175", "limit": "ZSPD", "sid": "SASAN 5B",
-		"alt": 6900, "squawk": "4215", "qnh": 1013,
+		"alt": 6000, "squawk": "4215", "qnh": 1013,
 	}
 	var xml := VoiceGrammar.build(param)
 	var path := out_dir.path_join("readback.srgs")

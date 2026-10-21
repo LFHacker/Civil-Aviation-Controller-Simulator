@@ -165,7 +165,9 @@ static func teaching_hint(mode: String) -> String:
 	if mode == "preset":
 		return "点下面任意一条候选通话即可发出；不确定就先用「请稍等」。"
 	if mode == "text":
-		return "输入完整通话，系统按关键词校验七项要素（语音档未接入，用文本代替）。"
+		return "输入完整通话，系统按关键词校验七项要素。"
+	if mode == "voice":
+		return "按住通话键，把完整许可说出来（含呼号、界限、程序、高度、编码、修正海压）。先看下方参考值再开口。"
 	return "逐项选好离场程序、高度、应答机，再点「发放行许可」。"
 
 static func check_slots(slots: Array, filled: Dictionary) -> Dictionary:

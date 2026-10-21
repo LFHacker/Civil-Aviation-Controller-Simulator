@@ -36,8 +36,8 @@ const LIMIT_FALLBACK := "ZSPD"
 ## SAPI 桌面引擎不启用 SRGS 语义标签（实测 Semantics.Value 恒为 null），
 ## 但**规则名**一定会跟着识别结果回来（RecognitionResult.Grammar.RuleName）。
 ## 所以识别端按规则名逐条加载，返回哪条规则就等于哪一项读错。
-static func build(param: Dictionary) -> String:
-	var variants := variant_lines(param)
+static func build(param: Dictionary, mode: String = "readback") -> String:
+	var variants := variant_lines(param, mode)
 	var body := ""
 	for v in variants:
 		body += "\t<rule id=\"%s\" scope=\"public\">%s</rule>\n" % [
@@ -49,15 +49,18 @@ static func build(param: Dictionary) -> String:
 
 
 ## 规则 id 列表（识别端按这个逐条加载）
-static func rule_ids(param: Dictionary) -> Array:
+static func rule_ids(param: Dictionary, mode: String = "readback") -> Array:
 	var out: Array = []
-	for v in variant_lines(param):
+	for v in variant_lines(param, mode):
 		out.append(String(v.tag))
 	return out
 
 
-## 所有候选句：[{tag, text}]，第一条永远是正确复诵。
-static func variant_lines(param: Dictionary) -> Array:
+## 所有候选句：[{tag, text}]，第一条永远是正确的那句。
+##
+## mode = "readback"  机组复诵（呼号在首尾各一次，按 MH/T 4014 以完整呼号终止）
+## mode = "clearance" 管制放行（玩家说的那一句，呼号只在开头）
+static func variant_lines(param: Dictionary, mode: String = "readback") -> Array:
 	var cs := _spoken_callsign(String(param.get("callsign", "")))
 	var sid := _spoken_sid(String(param.get("sid", "")))
 	var limit := _spoken_limit(String(param.get("limit", LIMIT_FALLBACK)))
@@ -68,7 +71,7 @@ static func variant_lines(param: Dictionary) -> Array:
 	var out: Array = []
 	var seen := {}
 	var add := func(tag: String, a: int, s: String, q: int, sd: String, lim: String) -> void:
-		var line := _line(cs, lim, sd, a, s, q)
+		var line := _line(cs, lim, sd, a, s, q, mode)
 		if seen.has(line):
 			return
 		seen[line] = true
@@ -129,14 +132,18 @@ static func _spoken_limit(limit: String) -> String:
 	return _flat(limit)
 
 
-## 一句完整复诵的口语文本。顺序与 DeliveryDesk.readback_text_of 一致：
-## 许可放行至 <界限> 按 <程序> 离场 初始高度 <米> 应答机 <编码> 修正海压 <气压> <呼号>
+## 一句完整通话的口语文本。顺序与 DeliveryDesk 发的话一致：
+## <呼号> 许可放行至 <界限> 按 <程序> 离场 初始高度 <米> 应答机 <编码> 修正海压 <气压>
+## readback 模式下末尾再报一次呼号（MH/T 4014：以完整呼号终止）。
 static func _line(cs: String, limit: String, sid: String, alt: int,
-		squawk: String, qnh: int) -> String:
-	return "%s许可放行至%s按%s离场初始高度%s米应答机%s修正海压%s%s" % [
+		squawk: String, qnh: int, mode: String = "readback") -> String:
+	var body := "%s许可放行至%s按%s离场初始高度%s米应答机%s修正海压%s" % [
 		_flat(cs), _flat(limit), _flat(sid),
 		Radio.read_digits(str(alt)), Radio.read_digits(_flat(squawk)),
-		Radio.read_digits(str(qnh)), _flat(cs)]
+		Radio.read_digits(str(qnh))]
+	if mode == "clearance":
+		return body
+	return body + _flat(cs)
 
 
 static func _bump_last(s: String) -> String:

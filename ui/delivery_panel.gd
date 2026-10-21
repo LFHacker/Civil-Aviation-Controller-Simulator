@@ -59,6 +59,13 @@ var _cand_box: VBoxContainer
 var _text_row: HBoxContainer
 var _text_edit: LineEdit
 var _text_btn: Button
+## 高级模式（08 §4）语音通话
+var _voice_row: VBoxContainer
+var _voice_btn: Button
+var _voice_state: Label
+var _voice_text: Label
+var _vin: VoiceInput
+var _voice_busy := false
 var _dep_card: PanelContainer
 var _dep_grid: GridContainer
 var _dep_taxi_btn: Button
@@ -573,6 +580,28 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_text_btn.pressed.connect(_on_issue_text)
 	_text_row.add_child(_text_btn)
 	egrid.add_child(_text_row)
+
+	# 高级模式（08 §4）：真实语音通话 —— 按住说话，松开识别
+	_voice_row = VBoxContainer.new()
+	_voice_row.add_theme_constant_override("separation", 6)
+	egrid.add_child(_voice_row)
+	var vrow := HBoxContainer.new()
+	vrow.add_theme_constant_override("separation", 10)
+	_voice_row.add_child(vrow)
+	_voice_btn = _action_button("按下通话", AtcTheme.C_ACCENT)
+	_voice_btn.custom_minimum_size = Vector2(150.0 * AtcTheme.UI_SCALE,
+		34.0 * AtcTheme.UI_SCALE)
+	_voice_btn.focus_mode = Control.FOCUS_NONE
+	_voice_btn.button_down.connect(_on_voice_down)
+	_voice_btn.button_up.connect(_on_voice_up)
+	vrow.add_child(_voice_btn)
+	_voice_state = _label("按住说话，松开识别", 12, 400, AtcTheme.C_TEXT_DIM)
+	_voice_state.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_voice_state.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vrow.add_child(_voice_state)
+	_voice_text = _label("", 12, 400, AtcTheme.C_TEXT_SOFT)
+	_voice_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_voice_row.add_child(_voice_text)
 
 	# 机组漏报通播时的提示卡（第一百五十九条：建立联络应当表明已收到通播）
 	_atis_card = PanelContainer.new()
@@ -1330,9 +1359,15 @@ func _refresh_detail() -> void:
 	_update_preview()
 	_refresh_handoff(f)
 	_refresh_dep_info(f)
-	# 三种发布模式（规范 §5.1）：只有当前模式对应的控件可见
+	# 四种发布模式（规范 §5.1 + 08 §4 高级模式）：只有当前模式对应的控件可见
 	_cand_box.visible = desk.issue_mode == "preset" and can_issue
 	_text_row.visible = desk.issue_mode == "text" and can_issue
+	if _voice_row != null:
+		# 语音模式在"可发放行"或"等复诵"时都要能说话：前者说许可，后者复诵识别
+		_voice_row.visible = desk.issue_mode == "voice" and \
+			(can_issue or f.state == Flight.State.READBACK)
+		if _voice_row.visible:
+			_refresh_voice_label(f)
 	if _cand_box.visible:
 		_refresh_candidates()
 
@@ -1812,4 +1847,133 @@ func _on_require_atis() -> void:
 		_hint.text = String(r.error)
 		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 		return
+	refresh()
+
+
+# ---------------------------------------------------------------- 高级模式：语音（08 §4）
+
+func _ensure_voice() -> void:
+	if _vin != null:
+		return
+	_vin = VoiceInput.new()
+	_vin.name = "VoiceInput"
+	add_child(_vin)
+
+
+## 语法参数取**已发布的许可值**：机组该复诵的就是这些，玩家该说的也是这些。
+func _voice_param(f: Flight) -> Dictionary:
+	return {
+		"callsign": f.callsign,
+		"limit": f.clearance_limit if f.clearance_limit != "" else f.destination,
+		"sid": f.sid,
+		"alt": f.initial_alt_m,
+		"squawk": f.squawk,
+		"qnh": int(desk.field.get("qnh", 0)),
+	}
+
+
+func _refresh_voice_label(f: Flight) -> void:
+	if _voice_state == null or _voice_busy or _vin != null and _vin.recording:
+		return
+	if not VoiceAsr.available():
+		_voice_state.text = "识别助手不可用（先编译 tools/atc-listen）"
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_WARM)
+		return
+	if f.state == Flight.State.READBACK:
+		_voice_state.text = "按住复诵一遍，松开识别"
+	else:
+		_voice_state.text = "按住说出放行许可，松开识别"
+	_voice_state.add_theme_color_override("font_color", AtcTheme.C_TEXT_DIM)
+
+
+func _on_voice_down() -> void:
+	if desk == null or _selected == "" or _voice_busy:
+		return
+	_ensure_voice()
+	if not _vin.usable() and not _vin.using_test_wav():
+		_voice_state.text = "没有可用的麦克风或识别助手"
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	if not _vin.begin():
+		_voice_state.text = _vin.last_reason
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	_voice_btn.text = "松开结束"
+	_voice_state.text = "● 正在收音…"
+	_voice_state.add_theme_color_override("font_color", AtcTheme.C_WARM)
+
+
+func _on_voice_up() -> void:
+	if _vin == null or not _vin.recording:
+		return
+	_voice_btn.text = "按下通话"
+	var wav := _vin.end()
+	if wav == "":
+		_voice_state.text = _vin.last_reason
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	_voice_state.text = "识别中…"
+	_voice_state.add_theme_color_override("font_color", AtcTheme.C_ACCENT)
+	_recognize_voice(wav)
+
+
+func _recognize_voice(wav: String) -> void:
+	var f := desk.get_flight(_selected)
+	if f == null:
+		return
+	_voice_busy = true
+	if not _vin.asr.is_running() and not _vin.asr.start():
+		_voice_busy = false
+		_voice_state.text = "识别助手启动失败：" + _vin.asr.last_error
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	# 待复核时听的是机组复诵，其余时候听的是玩家说的许可
+	var readback := f.state == Flight.State.READBACK
+	var mode := "readback" if readback else "clearance"
+	var param := _voice_param(f)
+	var dir := OS.get_user_data_dir().path_join("voice")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var srgs := dir.path_join("voice.srgs")
+	var wf := FileAccess.open(srgs, FileAccess.WRITE)
+	if wf == null:
+		_voice_busy = false
+		_voice_state.text = "写不了语法文件"
+		return
+	wf.store_string(VoiceGrammar.build(param, mode))
+	wf.close()
+	var ids := VoiceGrammar.rule_ids(param, mode)
+	var g := _vin.asr.load_grammar(srgs, ids)
+	if not bool(g.get("ok", false)):
+		_voice_busy = false
+		_voice_state.text = "语法载入失败：" + String(g.get("error", ""))
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	var r := _vin.asr.recognize(wav)
+	_voice_busy = false
+	var conf := float(r.get("confidence", 0.0))
+	var text := String(r.get("text", ""))
+	_voice_text.text = ("转录：" + text) if text != "" else "（没识别出内容）"
+	if not bool(r.get("ok", false)):
+		_voice_state.text = "没听清，请再说一遍"
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_WARM)
+		return
+	if readback:
+		var res := desk.apply_voice_readback(f.callsign, String(r.get("tag", "")),
+			conf, now)
+		refresh()
+		_voice_state.text = String(res.get("note", res.get("error", "")))
+		_voice_state.add_theme_color_override("font_color",
+			AtcTheme.C_ACCENT if String(res.get("wrong", "")) == "" else AtcTheme.C_WARM)
+		return
+	var res2 := desk.issue_voice(f.callsign, text, conf, now)
+	if bool(res2.get("unheard", false)):
+		_voice_state.text = "机组没听清，已要求重说"
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_WARM)
+	elif not bool(res2.get("ok", false)):
+		_voice_state.text = String(res2.get("error", ""))
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+	else:
+		_voice_state.text = "已发出，等机组复诵"
+		_voice_state.add_theme_color_override("font_color", AtcTheme.C_ACCENT)
+	_handle_issue_result(res2)
 	refresh()

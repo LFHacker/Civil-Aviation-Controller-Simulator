@@ -56,7 +56,11 @@ func _test_teaching() -> void:
 	var f := Radio.teaching_hint("form")
 	_check(f.contains("发放行许可"), "填空式提示逐项填", f)
 	var t := Radio.teaching_hint("text")
-	_check(t.contains("语音档未接入"), "文本模式明确标注语音未接入", t)
+	_check(t.contains("校验七项要素"), "文本模式提示校验要素", t)
+	# 文本模式不再标"语音未接入"：语音已是独立模式（08 §4）
+	_check(not t.contains("未接入"), "文本模式不再谎称语音未接入", t)
+	var v := Radio.teaching_hint("voice")
+	_check(v.contains("按住") and v.contains("修正海压"), "语音模式提示按住并说全要素", v)
 	_check(Radio.teaching_hint("随便").contains("发放行许可"), "未知模式退回默认")
 
 
