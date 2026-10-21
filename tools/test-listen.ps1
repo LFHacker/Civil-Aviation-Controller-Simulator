@@ -1,10 +1,12 @@
-﻿# 语音识别链路端到端验证（08 §4「听」）。
+﻿# 语音识别链路端到端验证（08 §4 / §7.1「听」）。
 #
-# 验证的不是"能不能识别中文"，而是**能不能判出机组读错了哪一项**：
-#   ① 用逻辑层 VoiceGrammar.build() 生成闭集语法（正确 + 五项各错一位）；
+# 验证的不是"能不能识别中文"，而是**能不能判出玩家/机组说的是哪一种通话、错在哪一项**：
+#   ① 用逻辑层 VoiceGrammar.build() 生成三种通话的闭集语法
+#      （复诵 6 变体 / 复诵确认或纠正 2 句 / 移交地面 2 句）；
 #   ② 把每条候选念成音频（edge-tts，开发机用；游戏运行时不依赖它）；
 #   ③ 交给 tools/atc-listen/AtcListen.exe 识别；
-#   ④ 断言返回的规则名 == 当初生成的那条变体标签。
+#   ④ 断言返回的规则名 == 当初生成的那条变体标签；
+#   ⑤ 再把识别出的文本喂回逻辑层，确认七项要素解析得出。
 #
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
@@ -57,11 +59,15 @@ $dump = & $Godot --headless --path $proj --script res://tools/dump_voice_grammar
 $mLines = [regex]::Match($dump, "GRAMMAR_ITEMS:(\d+)")
 $mTags = [regex]::Match($dump, "GRAMMAR_TAGS:([\w,]+)")
 $srgs = Join-Path $work "readback.srgs"
-Check ($mLines.Success -and [int]$mLines.Groups[1].Value -eq 6) "生成 6 条候选" $dump
+Check ($mLines.Success -and [int]$mLines.Groups[1].Value -eq 6) "复诵生成 6 条候选" $dump
 Check (Test-Path $srgs) "语法文件已写盘"
 $tags = @()
 if ($mTags.Success) { $tags = $mTags.Groups[1].Value -split "," }
-Check ($tags.Count -eq 6) "标签齐 ${tags}" ($tags -join ",")
+Check ($tags.Count -eq 6) "复诵标签齐 ${tags}" ($tags -join ",")
+foreach ($m in @("confirm", "handoff")) {
+    $f2 = Join-Path $work ($m + ".srgs")
+    Check (Test-Path $f2) ($m + " 语法已生成")
+}
 
 # ---- 3. 生成音频（可选） ----
 $audio = @{}
@@ -74,30 +80,58 @@ try {
 
 $xml = [IO.File]::ReadAllText($srgs, [Text.Encoding]::UTF8)
 $items = [regex]::Matches($xml, '<rule id="(\w+)" scope="public">(.*?)</rule>')
-Check ($items.Count -eq 6) "语法里能解析出 6 条规则" ($items.Count)
+Check ($items.Count -eq 6) "复诵语法里能解析出 6 条规则" ($items.Count)
 
 if ($canSynth) {
-    Write-Host "· 合成音频并识别"
-    foreach ($m in $items) {
-        $tag = $m.Groups[1].Value
-        $text = $m.Groups[2].Value
-        $mp3 = Join-Path $work ("e2e_" + $tag + ".mp3")
-        $wav = Join-Path $work ("e2e_" + $tag + ".wav")
-        & $Python -m edge_tts --voice zh-CN-YunxiNeural --rate=+10% --text $text --write-media $mp3 2>&1 | Out-Null
-        & $Ffmpeg -y -loglevel error -i $mp3 -ar 16000 -ac 1 -c:a pcm_s16le $wav
-        $audio[$tag] = $wav
+    Write-Host "· 合成音频（复诵 + 确认/纠正 + 移交：08 §7.1 三类玩家语音）"
+    foreach ($mode in @("readback", "confirm", "handoff")) {
+        $file = Join-Path $work ($mode + ".srgs")
+        if (-not (Test-Path $file)) { continue }
+        $xml2 = [IO.File]::ReadAllText($file, [Text.Encoding]::UTF8)
+        $items2 = [regex]::Matches($xml2, '<rule id="(\w+)" scope="public">(.*?)</rule>')
+        foreach ($m in $items2) {
+            $tag = $m.Groups[1].Value
+            $text = $m.Groups[2].Value
+            $key = $mode + "|" + $tag
+            $mp3 = Join-Path $work ("e2e_" + $mode + "_" + $tag + ".mp3")
+            $wav = Join-Path $work ("e2e_" + $mode + "_" + $tag + ".wav")
+            & $Python -m edge_tts --voice zh-CN-YunxiNeural --rate=+10% --text $text --write-media $mp3 2>&1 | Out-Null
+            & $Ffmpeg -y -loglevel error -i $mp3 -ar 16000 -ac 1 -c:a pcm_s16le $wav
+            $audio[$key] = $wav
+        }
     }
 } else {
     Write-Host "  跳过音频合成：没有可用的 edge-tts（只验证语法与助手）"
 }
 
-# ---- 4. 跑识别 ----
+# ---- 4. 跑识别：每种通话各载一次语法，再逐条识别 ----
 # ⚠️ 命令必须逐条单独拼成字符串：把 "grammar 路径" 与标签写成数组元素里的拼接表达式时，
 # PowerShell 会把它拆成两条命令发过去（踩过），后面所有结果就整体错位一行。
-$grammarCmd = "grammar {0} {1}" -f $srgs, ($tags -join ",")
 $cmds = @("ping")
-$cmds += $grammarCmd
-foreach ($t in $tags) { if ($audio.ContainsKey($t)) { $cmds += ("recog " + $audio[$t]) } }
+$expect = @()
+$ruleCount = 0
+foreach ($mode in @("readback", "confirm", "handoff")) {
+    if ($audio.Count -eq 0) { continue }
+    $file = Join-Path $work ($mode + ".srgs")
+    if (-not (Test-Path $file)) { continue }
+    $mModeTags = [regex]::Match($dump, ("GRAMMAR_" + $mode.ToUpper() + ":([\w,]+)"))
+    if (-not $mModeTags.Success) { continue }
+    $modeTags = $mModeTags.Groups[1].Value -split ","
+    $cmds += ("grammar {0} {1}" -f $file, ($modeTags -join ","))
+    $ruleCount = $modeTags.Count
+    foreach ($t in $modeTags) {
+        $key = $mode + "|" + $t
+        if ($audio.ContainsKey($key)) {
+            $cmds += ("recog " + $audio[$key])
+            $expect += $key
+        }
+    }
+}
+if ($audio.Count -eq 0) {
+    # 没合成音频时也至少验一次语法加载（用复诵那份）
+    $cmds += ("grammar {0} {1}" -f $srgs, ($tags -join ","))
+    $ruleCount = 6
+}
 $cmds += "quit"
 $lines = $cmds | & $exe 2>&1
 $i = 0
@@ -108,23 +142,26 @@ foreach ($line in $lines) {
 Check ($i -ge 2) "助手有回应（ping + grammar）" ($lines -join " / ")
 if ($lines.Count -ge 2) {
     Check ($lines[0] -match '"ok":true') "识别引擎就绪" $lines[0]
-    Check ($lines[1] -match '"rules":6') "6 条规则全部加载" $lines[1]
 }
 
 if ($audio.Count -gt 0) {
-    # 第 3 行起是识别结果，顺序与 $tags 一致
-    for ($k = 0; $k -lt $tags.Count; $k++) {
-        $tag = $tags[$k]
-        $idx = 2 + $k
-        if ($idx -ge $lines.Count) { Check $false ("识别 " + $tag) "缺回应"; continue }
+    # 第 2 行起是识别结果，顺序与 $expect 一致（每换一种语法，加载回一行）
+    $idx = 1
+    foreach ($key in $expect) {
+        $tag = ($key -split "\|")[1]
+        $mode = ($key -split "\|")[0]
+        # 跳过 grammar 加载的回显
+        while ($idx -lt $lines.Count -and $lines[$idx] -match '"rules"') { $idx++ }
+        if ($idx -ge $lines.Count) { Check $false ("识别 " + $key) "缺回应"; $idx++; continue }
         $obj = $lines[$idx]
+        $idx++
         $mTag = [regex]::Match($obj, '"tag":"(\w+)"')
         $mMs = [regex]::Match($obj, '"ms":(\d+)')
         $mCf = [regex]::Match($obj, '"confidence":([\d.]+)')
         $got = if ($mTag.Success) { $mTag.Groups[1].Value } else { "" }
-        Check ($got -eq $tag) ("识别出 " + $tag) $obj
-        if ($mMs.Success) { Check ([int]$mMs.Groups[1].Value -lt 500) ($tag + " 耗时 " + $mMs.Groups[1].Value + "ms（<500ms）") }
-        if ($mCf.Success) { Check ([double]$mCf.Groups[1].Value -ge 0.8) ($tag + " 置信度 " + $mCf.Groups[1].Value) }
+        Check ($got -eq $tag) ("识别出 " + $mode + "/" + $tag) $obj
+        if ($mMs.Success) { Check ([int]$mMs.Groups[1].Value -lt 500) ($key + " 耗时 " + $mMs.Groups[1].Value + "ms（<500ms）") }
+        if ($mCf.Success) { Check ([double]$mCf.Groups[1].Value -ge 0.8) ($key + " 置信度 " + $mCf.Groups[1].Value) }
     }
 }
 

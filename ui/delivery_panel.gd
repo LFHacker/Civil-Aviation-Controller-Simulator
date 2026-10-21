@@ -1973,7 +1973,12 @@ func _refresh_voice_label(f: Flight) -> void:
 		_voice_state.add_theme_color_override("font_color", AtcTheme.C_WARM)
 		return
 	if f.state == Flight.State.READBACK:
-		_voice_state.text = "按住复诵一遍，松开识别"
+		if desk.readback_hard:
+			_voice_state.text = "按住复诵一遍，松开识别"
+		else:
+			_voice_state.text = "按住说「复诵正确」或「复诵有误」"
+	elif f.state == Flight.State.CLEARED and not f.handed_off:
+		_voice_state.text = "按住说「联系地面 121.750，再见」"
 	else:
 		_voice_state.text = "按住说出放行许可，松开识别"
 	_voice_state.add_theme_color_override("font_color", AtcTheme.C_TEXT_DIM)
@@ -2037,10 +2042,18 @@ func _recognize_voice(wav: String) -> void:
 		_voice_state.text = "识别助手启动失败：" + _vin.asr.last_error
 		_voice_state.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 		return
-	# 待复核时听的是机组复诵，其余时候听的是玩家说的许可
-	var readback := f.state == Flight.State.READBACK
-	var mode := "readback" if readback else "clearance"
+	# 08 §7.1 四类通话各自一套语法：
+	#   高阶复诵 → 听机组复诵（逐项判定）；简易复诵 → 听玩家说"复诵正确/有误"；
+	#   已放行未移交 → 听从玩家的移交；其余 → 听放行许可。
+	var mode := "clearance"
+	var readback := false
+	if f.state == Flight.State.READBACK:
+		readback = bool(desk.readback_hard)
+		mode = "readback" if readback else "confirm"
+	elif f.state == Flight.State.CLEARED and not f.handed_off:
+		mode = "handoff"
 	var param := _voice_param(f)
+	param["ground_freq"] = str(desk.field.get("ground_freq", "121.750"))
 	var dir := OS.get_user_data_dir().path_join("voice")
 	DirAccess.make_dir_recursive_absolute(dir)
 	var srgs := dir.path_join("voice.srgs")

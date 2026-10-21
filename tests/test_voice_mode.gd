@@ -26,6 +26,7 @@ func _initialize() -> void:
 	_test_grammar()
 	_test_desk_voice()
 	_test_voice_readback()
+	_test_voice_calls()
 	print("")
 	print("────────────────────────────")
 	if _fails == 0:
@@ -212,6 +213,49 @@ func _test_desk_voice() -> void:
 		"教学关卡里低置信度复诵也照判", str(r7))
 
 
+func _test_voice_calls() -> void:
+	_section("放行席四类通话都能用语音说（08 §7.1）")
+	# 简易复诵：玩家说「复诵正确」→ 直接确认放行
+	var d := _rb_desk(false)
+	var r := d.issue_voice("RBK001", "RBK001复诵正确", 0.95, 10.0)
+	_check(bool(r.ok), "说「复诵正确」能确认", str(r))
+	_check(String(r.get("kind", "")) == "rb_ok", "判为复诵确认", str(r.get("kind")))
+	_check(d.get_flight("RBK001").state == Flight.State.CLEARED, "状态到已放行",
+		str(d.get_flight("RBK001").state))
+
+	# 说「复诵有误」→ 退回重发
+	var d2 := _rb_desk(false)
+	var r2 := d2.issue_voice("RBK001", "RBK001复诵有误重新发布许可", 0.95, 10.0)
+	_check(bool(r2.ok), "说「复诵有误」能退回", str(r2))
+	_check(d2.get_flight("RBK001").state == Flight.State.PENDING, "退回待重发",
+		str(d2.get_flight("RBK001").state))
+	_check(d2.get_flight("RBK001").reissue_count == 1, "重发计数 +1")
+
+	# 移交地面
+	var d3 := _rb_desk(false)
+	d3.accept_readback("RBK001", 10.0)
+	var r3 := d3.issue_voice("RBK001", "RBK001联系地面121750再见", 0.95, 20.0)
+	_check(bool(r3.ok), "说移交能发出去", str(r3))
+	_check(String(r3.get("kind", "")) == "handoff", "判为移交", str(r3.get("kind")))
+	_check(d3.get_flight("RBK001").handed_off, "移交生效")
+
+	# 通用短语：只说话，不动状态
+	var d4 := _desk()
+	var before := d4.get_flight("ISS001").state
+	var r4 := d4.issue_voice("ISS001", "ISS001请稍等", 0.95, 1.0)
+	_check(bool(r4.ok), "「请稍等」能发", str(r4))
+	_check(d4.get_flight("ISS001").state == before, "通用短语不改状态")
+	var last := String((d4.transcript[d4.transcript.size() - 1] as Dictionary).text)
+	_check(last.contains("请稍等"), "通用短语进了通话记录", last)
+
+	# 确认/退回/移交自己会记记录，不能重复记两条
+	var d5 := _rb_desk(false)
+	var n_before := d5.transcript.size()
+	d5.issue_voice("RBK001", "RBK001复诵正确", 0.95, 10.0)
+	_check(d5.transcript.size() - n_before == 1, "确认只记一条通话记录",
+		str(d5.transcript.size() - n_before))
+
+
 func _test_grammar() -> void:
 	_section("闭集语法（听）")
 	var param := {"callsign": "CES5175", "limit": "ZSPD", "sid": "SASAN 5B",
@@ -222,8 +266,11 @@ func _test_grammar() -> void:
 	var tags: Array = []
 	for v in lines:
 		tags.append(String((v as Dictionary).tag))
-	for k in VoiceGrammar.TAGS.keys():
+	# 复诵语法只覆盖六个变体；v_bad / v_freq 属于另外两种通话类型（见下）
+	for k in ["v_ok", "v_alt", "v_squawk", "v_qnh", "v_sid", "v_limit"]:
 		_check(tags.has(String(k)), "含变体 %s" % String(k))
+	_check(VoiceGrammar.lines_for(param, "readback").size() == 6,
+		"复诵模式 6 条", str(lines.size()))
 	# 每条候选必须互不相同，否则识别器分不出读错的是哪一项
 	var uniq := {}
 	for v in lines:
@@ -265,6 +312,35 @@ func _test_grammar() -> void:
 	_check(bool(VoiceGrammar.parse_tag("v_qnh").ok) == false, "v_qnh.ok = false")
 	_check(bool(VoiceGrammar.parse_tag("").known) == false, "空标签不算判出来")
 	_check(bool(VoiceGrammar.parse_tag("v_xxx").known) == false, "未知标签不算判出来")
+
+	_section("另外两类通话的语法（08 §7.1）")
+	var cf := VoiceGrammar.lines_for(param, "confirm")
+	_check(cf.size() == 2, "确认/纠正只有两句", str(cf.size()))
+	var cf_tags: Array = []
+	for v in cf:
+		cf_tags.append(String((v as Dictionary).tag))
+	_check(cf_tags.has("v_ok") and cf_tags.has("v_bad"), "两句各有标签", str(cf_tags))
+	_check(String((cf[1] as Dictionary).text).contains("复诵有误"),
+		"第二句是纠正", String((cf[1] as Dictionary).text))
+	_check(String((cf[0] as Dictionary).text).contains("东方五幺拐五"),
+		"带呼号", String((cf[0] as Dictionary).text))
+	_check(String(VoiceGrammar.parse_tag("v_bad").wrong) == "readback",
+		"v_bad → 复诵错")
+
+	var hf := VoiceGrammar.lines_for(param, "handoff")
+	_check(hf.size() == 2, "移交两句（对/频率错）", str(hf.size()))
+	_check(String((hf[0] as Dictionary).tag) == "v_ok", "第一句是对的")
+	_check(String((hf[1] as Dictionary).tag) == "v_freq", "第二句频率读错")
+	_check(String((hf[0] as Dictionary).text).contains("联系地面"),
+		"含『联系地面』", String((hf[0] as Dictionary).text))
+	_check(String((hf[0] as Dictionary).text) != String((hf[1] as Dictionary).text),
+		"两句频段读法不同")
+	_check(String(VoiceGrammar.parse_tag("v_freq").wrong) == "freq",
+		"v_freq → 频率错")
+	# 移交语法要用到地面频率
+	var hp := param.duplicate()
+	hp["ground_freq"] = "121.750"
+	_check(VoiceGrammar.build(hp, "handoff").contains("联系地面"), "移交语法能生成")
 
 
 func _test_voice_readback() -> void:
@@ -311,7 +387,7 @@ func _test_voice_readback() -> void:
 	_check(bool(r5.ok) == false, "没有待复核复诵时被拒", str(r5))
 
 
-func _rb_desk() -> DeliveryDesk:
+func _rb_desk(hard: bool = true) -> DeliveryDesk:
 	var d := DeliveryDesk.new()
 	d.setup(999)
 	d.field = {
@@ -320,7 +396,7 @@ func _rb_desk() -> DeliveryDesk:
 		"clock_start": "0800", "airport_id": "ZDEM",
 	}
 	d.review_ref = {"types": {}, "alternates": [], "routes": {}, "loa": []}
-	d.readback_hard = true
+	d.readback_hard = hard
 	d.set_plan([{"callsign": "RBK001", "type": "B738", "dest": "ZBAA",
 		"stand": "A05", "sid": "RUMUK 8D", "alt": 6000}])
 	d.spawn_request(0.0)

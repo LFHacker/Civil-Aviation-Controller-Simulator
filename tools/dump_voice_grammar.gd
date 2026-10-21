@@ -14,21 +14,33 @@ func _initialize() -> void:
 	var param := {
 		"callsign": "CES5175", "limit": "ZSPD", "sid": "SASAN 5B",
 		"alt": 6000, "squawk": "4215", "qnh": 1013,
+		"ground_freq": "121.750",
 	}
-	var xml := VoiceGrammar.build(param)
-	var path := out_dir.path_join("readback.srgs")
+	# 三种通话各写一份语法（08 §7.1：复诵 / 复诵确认 / 移交地面）
+	for mode in ["readback", "confirm", "handoff"]:
+		if not _write(out_dir, param, mode):
+			quit(1)
+			return
+	print("GRAMMAR_OK")
+	quit(0)
+
+
+func _write(out_dir: String, param: Dictionary, mode: String) -> bool:
+	var path := out_dir.path_join(mode + ".srgs")
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		print("GRAMMAR_FAIL: 写不了 " + path)
-		quit(1)
-		return
-	f.store_string(xml)
+		return false
+	f.store_string(VoiceGrammar.build(param, mode))
 	f.close()
-	var lines := VoiceGrammar.variant_lines(param)
 	var tags: Array = []
-	for v in lines:
+	for v in VoiceGrammar.lines_for(param, mode):
 		tags.append(String(v.tag))
-	print("GRAMMAR_WRITTEN:" + ProjectSettings.globalize_path(path))
-	print("GRAMMAR_TAGS:" + ",".join(PackedStringArray(tags)))
-	print("GRAMMAR_ITEMS:%d" % lines.size())
-	quit(0)
+	var tag_line := ",".join(PackedStringArray(tags))
+	if mode == "readback":
+		# 老脚本按这两个键读，保持兼容
+		print("GRAMMAR_WRITTEN:" + ProjectSettings.globalize_path(path))
+		print("GRAMMAR_TAGS:" + tag_line)
+		print("GRAMMAR_ITEMS:%d" % tags.size())
+	print("GRAMMAR_%s:%s" % [mode.to_upper(), tag_line])
+	return true

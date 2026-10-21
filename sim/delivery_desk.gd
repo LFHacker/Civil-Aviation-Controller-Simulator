@@ -1419,10 +1419,33 @@ func issue_voice(callsign: String, transcript: String, confidence: float,
 		return {"ok": false, "mismatch": true,
 			"said": String(dec.get("said", "")),
 			"error": "呼号不符，请确认（说的是 %s）" % String(dec.get("said", ""))}
-	var res := issue_free_text(callsign, String(dec.get("text", "")), sim_time)
+	# 08 §7.1：放行席有四类玩家要说的通话，按类型分派到各自的动作。
+	# 注意：确认/退回/移交这三个动作**自己会记通话记录**，这里不能再记一遍。
+	var text := String(dec.get("text", ""))
+	var kind := String(dec.get("kind", ""))
+	var res: Dictionary
+	match kind:
+		"rb_ok":
+			res = accept_readback(callsign, sim_time)
+		"rb_bad":
+			res = reissue(callsign, sim_time)
+		"handoff":
+			res = handoff_ground(callsign, sim_time)
+		"wait", "repeat":
+			# 通用短语：不用改状态，只是把话说出去
+			_speak_atc(sim_time, text)
+			res = {"ok": true, "error": ""}
+		_:
+			res = issue_free_text(callsign, text, sim_time)
 	res["voice"] = true
-	res["kind"] = String(dec.get("kind", ""))
+	res["kind"] = kind
 	return res
+
+
+## 把管制说的这句记进通话记录（真说了才算说过）
+func _speak_atc(sim_time: float, text: String) -> void:
+	if text.strip_edges() != "":
+		_log(sim_time, "atc", text)
 
 
 ## 从一段通话里找 4 位八进制应答机编码（排除高度之类已经用掉的数字）。
@@ -1967,6 +1990,8 @@ static func _voice_item_label(key: String) -> String:
 		"qnh": return "修正海压"
 		"sid": return "离场程序"
 		"limit": return "放行界限"
+		"readback": return "复诵"
+		"freq": return "地面频率"
 	return key
 
 

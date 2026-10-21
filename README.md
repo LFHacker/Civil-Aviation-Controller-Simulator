@@ -269,11 +269,20 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 | `ui/voice_player.gd` | 逐片段播放、半双工打断、缺片跳过；由 `DeliveryDesk.speak_enabled` 开关 |
 
 **玩法上怎么用**：选项 →「许可发布模式」选 **真实语音**，右栏出现「按下通话」按钮：
-按住说话、松开识别；待复核复诵时同一个键用来识别机组复诵。
+按住说话、松开识别。08 §7.1 放行席的四类玩家通话都能用嘴说：
+
+| 状态 | 按钮行为 | 识别后 |
+|---|---|---|
+| 待放行 | 说完整放行许可 | 按七项要素校验后发出 |
+| 等复诵（简易） | 说「复诵正确」或「复诵有误」 | 确认放行 / 退回重发 |
+| 等复诵（高阶） | 反过来听**机组**复诵 | 逐项落复诵标记 |
+| 已放行未移交 | 说「联系地面 121.750，再见」 | 移交地面席 |
+
 识别不出内容时**不假装成功**，界面与机组回话都按 §4.3 说"没听清，请再说一遍"。
 
-实测（`tools/test-listen.ps1`，32 项断言全绿）：六个变体全部识别正确，
-**38–81 ms、置信度 95.6–99.5%**；对照开放式听写是 1047 ms / 置信度 32% 且完全读错。
+实测（`tools/test-listen.ps1`，45 项断言全绿）：三类通话十个变体全部识别正确，
+复诵 38–81 ms、确认/移交 10–17 ms，置信度 98.8–99.5%；
+对照开放式听写是 1047 ms / 置信度 32% 且完全读错。
 识别出的文本还能被逻辑层正确解析成七项要素（这一步单独验过）。
 
 **说（已接播放器）**——**不按整句合成**（要联网要 key），改成 49 条片段拼装 + 电台滤波
@@ -592,16 +601,16 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # 语音片段拼装（说）：37 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice.gd
 
-# 高级模式语音链路（转录规范化/要素/回退语义/闭集语法/语音复诵）：106 项断言
+# 高级模式语音链路（转录规范化/要素/回退语义/闭集语法/语音复诵/四类通话）：135 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_mode.gd
 
-# 语音识别端到端（真识别引擎 + 真语音，需 Windows + SAPI 中文识别器）：32 项断言
+# 语音识别端到端（三类通话 + 真识别引擎 + 真语音，需 Windows + SAPI）：45 项断言
 powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
 
 # 识别助手客户端（WAV 写入 / JSON / 双向管道 / 错误路径，无需麦克风）：23 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_asr.gd
 
-# 语音面板（按住通话回调、模式切换、失败路径、播报开关，无需真人说话）：22 项断言
+# 语音面板（按住通话回调、模式切换、失败路径、播报、辅助开关）：37 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_panel.gd
 
 # 语音片段库（缺件降级/角色分库/时长/直接读 OGG）：20 项断言
@@ -640,7 +649,7 @@ powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
 
 ## 当前状态
 
-v0.1.16
+v0.1.17
 
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
@@ -679,6 +688,7 @@ v0.1.13     已固定，不再改动
 v0.1.14     已固定，不再改动
 v0.1.15     已固定，不再改动
 v0.1.16     已固定，不再改动
+v0.1.17     已固定，不再改动
 ```
 
 版本号只有一个来源：`core/version.gd` 里的 `MAJOR / MINOR / PATCH`。

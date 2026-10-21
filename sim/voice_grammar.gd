@@ -23,6 +23,10 @@ const TAGS := {
 	"v_qnh": "qnh",
 	"v_sid": "sid",
 	"v_limit": "limit",
+	# 复诵确认/纠正：玩家判"有误"
+	"v_bad": "readback",
+	# 移交地面：频率读错
+	"v_freq": "freq",
 }
 
 const LIMIT_FALLBACK := "ZSPD"
@@ -37,7 +41,7 @@ const LIMIT_FALLBACK := "ZSPD"
 ## 但**规则名**一定会跟着识别结果回来（RecognitionResult.Grammar.RuleName）。
 ## 所以识别端按规则名逐条加载，返回哪条规则就等于哪一项读错。
 static func build(param: Dictionary, mode: String = "readback") -> String:
-	var variants := variant_lines(param, mode)
+	var variants := lines_for(param, mode)
 	var body := ""
 	for v in variants:
 		body += "\t<rule id=\"%s\" scope=\"public\">%s</rule>\n" % [
@@ -48,12 +52,49 @@ static func build(param: Dictionary, mode: String = "readback") -> String:
 		+ body + "</grammar>\n"
 
 
+## 按模式取候选句。四种模式对应 08 §7.1 放行席的通话类型：
+##   clearance 发布放行许可 / readback 听机组复诵 / confirm 复诵确认或纠正 / handoff 移交地面
+static func lines_for(param: Dictionary, mode: String = "readback") -> Array:
+	if mode == "confirm":
+		return confirm_lines(param)
+	if mode == "handoff":
+		return handoff_lines(param)
+	return variant_lines(param, mode)
+
+
 ## 规则 id 列表（识别端按这个逐条加载）
 static func rule_ids(param: Dictionary, mode: String = "readback") -> Array:
 	var out: Array = []
-	for v in variant_lines(param, mode):
+	for v in lines_for(param, mode):
 		out.append(String(v.tag))
 	return out
+
+
+## 复诵确认（放行 -> 机组）：只有两句，玩家说哪句就做哪个动作。
+## 08 §7.1 把"复诵确认/纠正"单列为一种通话类型。
+static func confirm_lines(param: Dictionary) -> Array:
+	var cs := _flat(_spoken_callsign(String(param.get("callsign", ""))))
+	return [
+		{"tag": "v_ok", "text": "%s复诵正确" % cs},
+		{"tag": "v_bad", "text": "%s复诵有误重新发布许可" % cs},
+	]
+
+
+## 移交地面（放行 -> 机组）：频段读错要能被识别成另一种变体，
+## 否则玩家把 121.750 说成 121.750 以外的频率也判"对"了。
+static func handoff_lines(param: Dictionary) -> Array:
+	var cs := _flat(_spoken_callsign(String(param.get("callsign", ""))))
+	var freq := _flat(String(param.get("ground_freq", "121.750")))
+	var digits := freq.replace(".", "")
+	var wrong := digits
+	if digits.length() > 1:
+		var tail := digits[digits.length() - 1]
+		var v := "0123456789".find(tail)
+		wrong = digits.substr(0, digits.length() - 1) + "0123456789"[(v + 1) % 10]
+	return [
+		{"tag": "v_ok", "text": "%s联系地面%s再见" % [cs, Radio.read_digits(digits)]},
+		{"tag": "v_freq", "text": "%s联系地面%s再见" % [cs, Radio.read_digits(wrong)]},
+	]
 
 
 ## 所有候选句：[{tag, text}]，第一条永远是正确的那句。
