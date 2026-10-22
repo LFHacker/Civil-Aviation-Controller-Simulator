@@ -598,8 +598,11 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # 陆空对话（读法/槽位/候选）：39 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_radio.gd
 
-# 语音片段拼装（说）：37 项断言
+# 语音片段拼装（说）：41 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice.gd
+
+# 设置窗口（分类导航 / 单选与开关动作）：30 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_settings_window.gd
 
 # 高级模式语音链路（转录规范化/要素/回退语义/闭集语法/语音复诵/四类通话）：135 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_mode.gd
@@ -649,7 +652,7 @@ powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
 
 ## 当前状态
 
-v0.1.17
+v0.1.18
 
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
@@ -663,8 +666,10 @@ v0.1.17
 - **放行席七态状态机**：规范 §0.2 口径，进程单标签直接显示
 - **视图菜单**：七块面板单独开关 + 三套布局预设 + 恢复默认布局，状态持久化
 - **窗口菜单**：显示模式 / 窗口尺寸 / 显示器 / 置顶 / 最小化 / 新开一个窗口 / 恢复默认
+- **设置窗口**（v0.1.18 重做）：原来挂在「选项」下的长条下拉菜单改成常规设置面板——
+  左侧分类「常规 / 对话 / 语音 / 关于」，右侧单选与开关行，底部「恢复默认设置 / 关闭」
 - **语音「听」链路**（08 §4）：闭集语法按放行内容现生成 → 变体规则名直接指出读错的项 →
-  落到逐项复诵判定；`tools/test-listen.ps1` 端到端 32 项断言（38–81 ms / 置信度 95.6–99.5%）
+  落到逐项复诵判定；`tools/test-listen.ps1` 端到端 45 项断言（10–81 ms / 置信度 98.8–99.5%）
 - **真实语音模式可玩**（08 §4.2）：选项 → 许可发布模式 →「真实语音」，
   右栏「按下通话」按住说话、松开识别；麦克风采集 → 16 kHz WAV → 常驻识别助手 → 逐项判定/发放许可
 - `设置` 仍是占位页；席位面板是占位区（下一步）
@@ -689,6 +694,7 @@ v0.1.14     已固定，不再改动
 v0.1.15     已固定，不再改动
 v0.1.16     已固定，不再改动
 v0.1.17     已固定，不再改动
+v0.1.18     已固定，不再改动
 ```
 
 版本号只有一个来源：`core/version.gd` 里的 `MAJOR / MINOR / PATCH`。

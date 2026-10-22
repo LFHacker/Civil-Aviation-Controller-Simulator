@@ -176,9 +176,16 @@ static func handoff(callsign_code: String, ground_freq: String) -> Array:
 
 
 ## 进离场程序：有中文读法就用专门片段，没有就退回逐位读（宁可少念不乱念）
+##
+## ⚠️ 工程里存的是 "RUMUK 8D"（带空格），读法表的键是 "RUMUK8D"。
+## 不先去掉空白就查不到，结果**整段离场程序被静默丢掉**（真的发生过：
+## 播出来的许可里只有"许可放行至…初始高度…"，没有"按 XX 离场"）。
 static func sid(sid_id: String) -> Array:
 	if sid_id == "":
 		return []
+	var key := sid_id.replace(" ", "").replace("\t", "")
+	if SID_TEXT.has(key):
+		return ["sid_" + key]
 	if SID_TEXT.has(sid_id):
 		return ["sid_" + sid_id]
 	return digits(sid_id)
@@ -188,6 +195,9 @@ static func sid(sid_id: String) -> Array:
 static func dest(dest_id: String) -> Array:
 	if dest_id == "":
 		return []
+	var key := dest_id.replace(" ", "").replace("\t", "")
+	if DEST_TEXT.has(key):
+		return ["dest_" + key]
 	if DEST_TEXT.has(dest_id):
 		return ["dest_" + dest_id]
 	return digits(dest_id)

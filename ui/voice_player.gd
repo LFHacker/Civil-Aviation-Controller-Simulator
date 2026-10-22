@@ -22,6 +22,9 @@ var _queue: Array = []
 var _role := "controller"
 var _wait := 0.0
 var _playing := false
+## 兜底超时：万一 finished 没来（音频设备忙、被别的程序占用、空流），
+## 队列不能就此卡死 —— 到点强制翻页。
+var _clip_deadline := 0.0
 
 
 func _ready() -> void:
@@ -81,6 +84,13 @@ func _next() -> void:
 		return
 	_player.stream = stream
 	_player.play()
+	# 流长度 + 余量；拿不到长度就按 1.5 s 兜底，绝不无限等
+	var secs := 1.5
+	if stream is AudioStreamOggVorbis:
+		secs = (stream as AudioStreamOggVorbis).get_length()
+		if secs <= 0.01:
+			secs = 1.5
+	_clip_deadline = Time.get_ticks_msec() / 1000.0 + secs + 0.4
 
 
 func _on_clip_finished() -> void:
@@ -93,6 +103,10 @@ func _process(dt: float) -> void:
 		set_process(false)
 		return
 	if _player.playing:
+		# finished 没来也要能翻页，否则整串播报会停在这一片
+		if _clip_deadline > 0.0 and Time.get_ticks_msec() / 1000.0 > _clip_deadline:
+			_player.stop()
+			_on_clip_finished()
 		return
 	if _wait > 0.0:
 		_wait -= dt

@@ -259,31 +259,15 @@ func _build_body() -> void:
 ##
 ## 用自绘面板而不是 PopupMenu：PopupMenu 在这个暗色主题下会把条目样式
 ## 全渲染成悬停态（实测过），自绘才能跟界面其它部分保持一致。
-const OPT_SAVE := 0
-const OPT_LOAD := 1
-const OPT_PAUSE := 2
-const OPT_EXIT := 3
-## 100+ = 难度；200+ = 许可发布模式
-const OPT_DIFF := 100
-const OPT_MODE := 200
-const OPT_CAND := 300
-## 语音播报开关（08 §4「说」）
-const OPT_SPEAK := 400
-## 语音辅助设置（08 §4.4 / §4.5）
-const OPT_VOICE_AUX := 500
+## 设置窗口取代了原来那条下拉菜单（十来行堆在一起，项目一多就没人找得到）。
+## 布局按常规软件来：左边分类（常规/对话/语音/关于），右边设置项，底下恢复默认与关闭。
 const DIFF_NAMES := ["简易", "进阶", "高阶"]
 const DIFF_KEYS := ["easy", "normal", "hard"]
 const MODE_NAMES := ["预设一键", "填空式", "自由文本", "真实语音"]
 const MODE_KEYS := ["preset", "form", "text", "voice"]
 
 var _options_layer: Control
-var _options_panel: PanelContainer
-var _opt_pause_btn: Button
-var _opt_diff_buttons: Array = []
-var _opt_mode_buttons: Array = []
-var _opt_cand_btn: Button
-var _opt_speak_btn: Button
-var _opt_aux_btn: Button
+var _settings_win: SettingsWindow
 var _aux_win: VoiceAuxWindow
 
 
@@ -295,99 +279,12 @@ func _build_options_menu() -> void:
 	# 整层放在最上面，否则会被信息面板盖住
 	_root.add_child(_options_layer)
 
-	# 点空白处关闭
-	var catcher := ColorRect.new()
-	catcher.color = Color(0, 0, 0, 0.001)
-	catcher.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	catcher.mouse_filter = Control.MOUSE_FILTER_STOP
-	catcher.gui_input.connect(func(ev: InputEvent) -> void:
-		if ev is InputEventMouseButton and ev.pressed:
-			_options_layer.visible = false)
-	_options_layer.add_child(catcher)
-
-	_options_panel = PanelContainer.new()
-	_options_panel.name = "OptionsPanel"
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.043, 0.059, 0.070, 0.99)
-	sb.border_color = Color(1, 1, 1, 0.14)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(3)
-	sb.content_margin_left = 8
-	sb.content_margin_right = 8
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	_options_panel.add_theme_stylebox_override("panel", sb)
-	_options_layer.add_child(_options_panel)
-
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 2)
-	_options_panel.add_child(col)
-
-	col.add_child(_option_button("保存游戏", OPT_SAVE))
-	col.add_child(_option_button("载入存档", OPT_LOAD))
-	col.add_child(_option_divider())
-	_opt_pause_btn = _option_button("暂停游戏", OPT_PAUSE)
-	col.add_child(_opt_pause_btn)
-	col.add_child(_option_divider())
-	col.add_child(_option_label("难度"))
-	for i in range(DIFF_NAMES.size()):
-		var b := _option_button("", OPT_DIFF + i)
-		col.add_child(b)
-		_opt_diff_buttons.append(b)
-	col.add_child(_option_label("许可发布模式"))
-	for i in range(MODE_NAMES.size()):
-		var b := _option_button("", OPT_MODE + i)
-		col.add_child(b)
-		_opt_mode_buttons.append(b)
-	_opt_cand_btn = _option_button("", OPT_CAND)
-	col.add_child(_opt_cand_btn)
-	_opt_speak_btn = _option_button("", OPT_SPEAK)
-	col.add_child(_opt_speak_btn)
-	_opt_aux_btn = _option_button("语音辅助…", OPT_VOICE_AUX)
-	col.add_child(_opt_aux_btn)
-	col.add_child(_option_divider())
-	col.add_child(_option_button("返回主菜单    ESC", OPT_EXIT))
-
-
-func _option_button(text: String, id: int) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.focus_mode = Control.FOCUS_NONE
-	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	b.custom_minimum_size = Vector2(196.0 * AtcTheme.UI_SCALE, 36.0 * AtcTheme.UI_SCALE)
-	b.add_theme_font_override("font", AtcTheme.font(500))
-	b.add_theme_font_size_override("font_size", AtcTheme.fs(15))
-	b.add_theme_color_override("font_color", AtcTheme.C_TEXT_SOFT)
-	b.add_theme_color_override("font_hover_color", AtcTheme.C_TEXT)
-	b.add_theme_color_override("font_disabled_color", AtcTheme.C_TEXT_FAINT)
-
-	var n := StyleBoxFlat.new()
-	n.bg_color = Color(0, 0, 0, 0)
-	n.set_corner_radius_all(2)
-	n.content_margin_left = 14
-	n.content_margin_right = 14
-	n.content_margin_top = 8
-	n.content_margin_bottom = 8
-	b.add_theme_stylebox_override("normal", n)
-	var h := n.duplicate() as StyleBoxFlat
-	h.bg_color = Color(0.37, 0.92, 0.83, 0.16)
-	b.add_theme_stylebox_override("hover", h)
-	b.add_theme_stylebox_override("focus", h)
-	var d := n.duplicate() as StyleBoxFlat
-	d.bg_color = Color(0, 0, 0, 0)
-	b.add_theme_stylebox_override("disabled", d)
-
-	b.pressed.connect(func() -> void:
-		_options_layer.visible = false
-		_on_option_selected(id))
-	return b
-
-
-func _option_divider() -> Control:
-	var line := ColorRect.new()
-	line.color = Color(1, 1, 1, 0.10)
-	line.custom_minimum_size = Vector2(0, 1)
-	return line
+	_settings_win = SettingsWindow.new()
+	_settings_win.name = "SettingsWindow"
+	_settings_win.version_text = AtcVersion.display()
+	_settings_win.closed.connect(func() -> void: _options_layer.visible = false)
+	_settings_win.action.connect(_on_settings_action)
+	_options_layer.add_child(_settings_win)
 
 
 func _on_options_pressed() -> void:
@@ -396,64 +293,97 @@ func _on_options_pressed() -> void:
 	if _options_layer.visible:
 		_options_layer.visible = false
 		return
-	_refresh_option_texts()
+	_open_settings()
+
+
+func _open_settings() -> void:
+	if _settings_win == null:
+		return
+	_settings_win.desk = session.delivery if session != null else null
+	_settings_win.paused = session != null and session.state.paused
+	_settings_win.open()
 	_options_layer.visible = true
-	# 贴在「选项」按钮正下方、右对齐
-	var r := _options_btn.get_global_rect()
-	var sz := _options_panel.get_combined_minimum_size()
-	_options_panel.size = sz
-	_options_panel.position = Vector2(
-		r.end.x - sz.x, r.end.y + 6.0 * AtcTheme.UI_SCALE)
 
 
-func _refresh_option_texts() -> void:
-	var paused := session != null and session.state.paused
-	_opt_pause_btn.text = "继续游戏" if paused else "暂停游戏"
+## 设置窗口发来的一次性动作。设置项的读写留在这里，
+## 是因为它们要用到 session 与存档系统，塞进窗口会把界面和数据层搅在一起。
+func _on_settings_action(id: String) -> void:
 	var d := session.delivery if session != null else null
-	var diff := "normal"
-	var mode := "form"
-	if d != null:
-		diff = d.difficulty
-		mode = d.issue_mode
-	for i in range(_opt_diff_buttons.size()):
-		var mark := "● " if DIFF_KEYS[i] == diff else "○ "
-		_opt_diff_buttons[i].text = mark + DIFF_NAMES[i]
-	for i in range(_opt_mode_buttons.size()):
-		var active := String(MODE_KEYS[i]) == mode
-		var pending := bool(_next_issue_mode != "" \
-			and String(MODE_KEYS[i]) == _next_issue_mode \
-			and _next_issue_mode != mode)
-		var mark2 := "● " if active else ("◐ " if pending else "○ ")
-		_opt_mode_buttons[i].text = mark2 + MODE_NAMES[i] \
-			+ ("（下局生效）" if pending else "")
-	if _opt_cand_btn != null:
-		var cand := d != null and d.candidate_error
-		_opt_cand_btn.text = ("☑ " if cand else "☐ ") + "含错误候选"
-	if _opt_speak_btn != null:
-		var speak := d != null and d.speak_enabled
-		var lib := VoiceLibrary.new()
-		var ready := lib.ready_for("controller")
-		_opt_speak_btn.text = ("☑ " if speak else "☐ ") + "语音播报" \
-			+ ("" if ready else "（未生成片段）")
-		_opt_speak_btn.disabled = not ready
+	if id.begins_with("pick:mode:"):
+		var i := MODE_KEYS.find(id.substr(10))
+		if i >= 0:
+			_set_issue_mode(i)
+		_open_settings()
+		return
+	if id.begins_with("pick:diff:"):
+		var j := DIFF_KEYS.find(id.substr(10))
+		if j >= 0:
+			_set_difficulty(j)
+		_open_settings()
+		return
+	if id == "toggle:cand":
+		if d != null:
+			d.candidate_error = not d.candidate_error
+			_save_game_settings()
+			_refresh_seat_panel()
+		_open_settings()
+		return
+	if id == "toggle:speak":
+		if d != null:
+			d.speak_enabled = not d.speak_enabled
+			_save_game_settings()
+			_refresh_seat_panel()
+		_open_settings()
+		return
+	if id == "aux":
+		if d != null and _aux_win != null:
+			_options_layer.visible = false
+			_aux_win.open(d)
+		return
+	if id == "demo":
+		if _settings_win != null:
+			_settings_win.play_demo()
+		return
+	if id == "reset":
+		_reset_settings()
+		return
+	if id == "save":
+		_options_layer.visible = false
+		_on_open_save()
+	elif id == "load":
+		_options_layer.visible = false
+		_on_open_load()
+	elif id == "pause":
+		_on_pause_pressed()
+		_open_settings()
+	elif id == "exit":
+		_options_layer.visible = false
+		exit_requested.emit()
+
+
+func _reset_settings() -> void:
+	if session == null or session.delivery == null:
+		return
+	var d := session.delivery
+	d.difficulty = "normal"
+	d.readback_hard = false
+	d.handoff_hard = false
+	d.issue_mode = "form"
+	_next_issue_mode = "form"
+	d.candidate_error = false
+	d.speak_enabled = false
+	d.allow_text_fallback = false
+	d.voice_aux = {}
+	_save_game_settings()
+	_refresh_seat_panel()
+	_open_settings()
+
 
 
 ## 难度/模式/候选开关变了，席位面板要重画（候选列表、哪个控件可见都跟着变）
 func _refresh_seat_panel() -> void:
 	if _seat_panel != null and _seat_panel.has_method("refresh"):
 		_seat_panel.call("refresh")
-
-
-## 选项面板里的小标题
-func _option_label(text: String) -> Label:
-	var lb := Label.new()
-	lb.text = text
-	lb.add_theme_font_override("font", AtcTheme.font(700))
-	lb.add_theme_font_size_override("font_size", AtcTheme.fs(11))
-	lb.add_theme_color_override("font_color", AtcTheme.C_TEXT_FAINT)
-	lb.custom_minimum_size = Vector2(0, 22.0 * AtcTheme.UI_SCALE)
-	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	return lb
 
 
 ## 难度切换（规范 §0.3）：同时决定复诵/移交要不要逐项自己判
@@ -526,50 +456,6 @@ func _load_game_settings() -> void:
 		d.voice_aux = aux as Dictionary
 	d.readback_hard = d.difficulty == "hard"
 	d.handoff_hard = d.difficulty == "hard"
-
-
-func _on_option_selected(id: int) -> void:
-	if id == OPT_VOICE_AUX:
-		if _aux_win != null and session != null and session.delivery != null:
-			_aux_win.open(session.delivery)
-		_options_layer.visible = false
-		return
-	if id == OPT_SPEAK:
-		if session != null and session.delivery != null:
-			session.delivery.speak_enabled = not session.delivery.speak_enabled
-			_save_game_settings()
-			_refresh_seat_panel()
-		_options_layer.visible = false
-		_on_options_pressed()
-		return
-	if id == OPT_CAND:
-		if session != null and session.delivery != null:
-			session.delivery.candidate_error = not session.delivery.candidate_error
-			_save_game_settings()
-			_refresh_seat_panel()
-		_options_layer.visible = false
-		_on_options_pressed()
-		return
-	if id >= OPT_MODE:
-		_set_issue_mode(id - OPT_MODE)
-		_refresh_seat_panel()
-		_options_layer.visible = false
-		_on_options_pressed()
-		return
-	if id >= OPT_DIFF:
-		_set_difficulty(id - OPT_DIFF)
-		_refresh_seat_panel()
-		_options_layer.visible = false
-		_on_options_pressed()
-		return
-	if id == OPT_SAVE:
-		_on_open_save()
-	elif id == OPT_LOAD:
-		_on_open_load()
-	elif id == OPT_PAUSE:
-		_on_pause_pressed()
-	elif id == OPT_EXIT:
-		exit_requested.emit()
 
 
 func _bar_button(text: String, on_pressed: Callable = Callable(),

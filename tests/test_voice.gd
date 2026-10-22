@@ -77,6 +77,15 @@ func _test_clearance() -> void:
 	_check(s2.has("p_clearance_to") and s2.has("p_initial_alt"),
 		"未登记的程序/机场不会打断整句", str(s2))
 	_check(not s2.has("dest_"), "空机场不产生空的 dest 片段")
+	# 工程里 SID 存成 "RUMUK 8D"（带空格），读法表的键是 "RUMUK8D"。
+	# 不先去掉空白就查不到，播出来的许可会**整段少掉离场程序**（真踩过）。
+	_check(Voice.sid("RUMUK 8D") == ["sid_RUMUK8D"], "带空格的程序名也取得到片段",
+		str(Voice.sid("RUMUK 8D")))
+	_check(Voice.sid("RUMUK8D") == ["sid_RUMUK8D"], "不带空格的写法一样")
+	_check(Voice.sid("").is_empty(), "空程序名不产生片段")
+	_check(Voice.dest("ZBAA") == ["dest_ZBAA"], "目的地取到片段")
+	var s3 := Voice.clearance("CCA1501", "RUMUK 8D", "ZBAA", 6000, "4215", 1013)
+	_check(s3.has("sid_RUMUK8D"), "许可里不能丢掉离场程序", str(s3))
 
 
 func _test_readback() -> void:

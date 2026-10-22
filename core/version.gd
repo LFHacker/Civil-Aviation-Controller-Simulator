@@ -4,9 +4,9 @@ extends RefCounted
 
 const MAJOR := 0
 const MINOR := 1
-const PATCH := 17
+const PATCH := 18
 
-const CODENAME := "calltypes"
+const CODENAME := "settings"
 
 
 ## 形如 "0.0.1"
