@@ -60,17 +60,12 @@ func _demo_desk() -> DeliveryDesk:
 	d.enable_handoff_check = true
 	d.enable_dep_info = true
 	d.pilot_check_enabled = true
-	d.set_plan([
-		{"callsign": "CCA1501", "type": "B738", "dest": "ZBAA", "stand": "A05",
-			"sid": "RUMUK 8D", "alt": 6000},
-		{"callsign": "CES2302", "type": "A320", "dest": "ZSPD", "stand": "A12",
-			"sid": "BETON 3A", "alt": 5000},
-		{"callsign": "CSN7788", "type": "A321", "dest": "ZGGG", "stand": "A07",
-			"sid": "SASAN 5B", "alt": 6000},
-	])
-	d.spawn_request(0.0)
-	d.spawn_request(0.0)
-	d.spawn_request(0.0)
+	# 和真实开局一致：灌当日计划，按 07 §2.2 的时刻只放"已经到点"的航班
+	var data: Variant = JSON.parse_string(
+		FileAccess.get_file_as_string("res://data/airports/demo.json"))
+	if data is Dictionary:
+		d.set_plan((data as Dictionary).get("schedule", []))
+	d.seed_due(0.0)
 	for f in d.flights:
 		f.checked = true
 		f.atis_ok = true

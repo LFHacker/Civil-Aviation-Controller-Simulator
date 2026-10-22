@@ -88,7 +88,9 @@ func ensure_seats() -> void:
 		else:
 			delivery = DeliveryDesk.new()
 			delivery.setup(0)
-			delivery.seed_initial(state.sim_time, 2)
+			# 07 §2.2：不在这里塞航班 —— 此刻当日计划还没灌进来（apply_airport 才灌），
+			# 在这里放只会撞上"没有计划就要一架"的兜底逻辑，放出来的是随机航班。
+			# 真正按时刻放人在 apply_airport 里做。
 
 
 ## 把各席位状态写回 state.extra，保存前调用。
@@ -132,13 +134,13 @@ func apply_airport(data: Dictionary, seed_plan: bool = true) -> void:
 	if arr.is_empty():
 		return
 	delivery.set_plan(arr)
-	# 全新一局：把开局随机塞的占位航班换成计划里的前几架
+	# 全新一局：清空占位状态，然后按 07 §2.2 的时刻放"已经到点该申请"的航班
 	delivery.flights = []
 	delivery.transcript = []
 	delivery.cleared_count = 0
 	delivery.reissue_total = 0
 	delivery.misjudge_count = 0
-	delivery.seed_initial(state.sim_time, mini(2, arr.size()))
+	delivery.seed_due(state.sim_time)
 ## 推进时钟。暂停时不走。
 func tick(delta: float) -> void:
 	if state.paused:

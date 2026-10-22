@@ -43,10 +43,15 @@ var reissue_total := 0
 ## 玩家误判次数（复诵不一致却点了"正确"）
 var misjudge_count := 0
 
-## 自动来航班的节奏：待放行少于 max_pending 时，每隔 spawn_interval 仿真秒来一架
+## 07 §2.2：每架航班按 TOBT 倒推，提前 lead_minutes 分钟进入"准备好申请"，
+## 再叠加 0–10 秒随机延迟（模拟飞行员完成最后检查）。默认 15 分钟，可配置。
+var lead_minutes := 15.0
+## 计划里没有 std 时刻时的兜底节奏：待放行少于 max_pending 时每 spawn_interval 秒来一架
 var spawn_interval := 18.0
 var max_pending := 3
 var _last_spawn := -1.0e9
+## 开局时今天已经过去多少分钟（来自 clock_start），计划时刻换算要用
+var _clock_origin := -1.0
 
 ## 当日飞行计划（来自机场数据 schedule）。为空时退回随机生成，
 ## 这样单元测试里不设计划也能照常跑。
@@ -1217,7 +1222,19 @@ func get_flight(callsign: String) -> Flight:
 	return null
 
 
-## 开局先塞几架，免得列表空着。
+## 开局把"已经到点该申请"的航班放出来（按计划时刻，不硬塞）。
+## 返回放了几架。没有计划时会放一架兜底，免得列表空着。
+func seed_due(sim_time: float) -> int:
+	var n := 0
+	while n < 8:
+		var f := maybe_spawn(sim_time)
+		if f == null:
+			break
+		n += 1
+	return n
+
+
+## 无条件塞几架（单元测试 / 关卡脚本用）。正常开局请用 seed_due。
 func seed_initial(sim_time: float, count: int = 2) -> void:
 	for i in range(count):
 		spawn_request(sim_time)
@@ -1225,13 +1242,51 @@ func seed_initial(sim_time: float, count: int = 2) -> void:
 
 
 ## 到点自动来一架新的放行申请；不该来的时候返回 null。
+##
+## 07 §2.2：按当日计划的起飞时刻倒推，提前 lead_minutes 分钟才允许申请 ——
+## 不是"每 18 秒冒一架"的无脑节奏。计划里没有时刻（或已经用完）时，
+## 才退回按间隔补，保证列表不会一直空着。
 func maybe_spawn(sim_time: float) -> Flight:
 	if pending().size() >= max_pending:
 		return null
+	var due := plan_request_minute(plan_index)
+	if plan_index < plan.size() and due >= 0.0:
+		var now_m := clock_origin() + sim_time / 60.0
+		if now_m + 0.001 < due:
+			return null
+		_last_spawn = sim_time
+		return spawn_request(sim_time)
 	if sim_time - _last_spawn < spawn_interval:
 		return null
 	_last_spawn = sim_time
 	return spawn_request(sim_time)
+
+
+## 开局时刻（当日分钟）。clock_start "0755" → 475。
+func clock_origin() -> float:
+	if _clock_origin < 0.0:
+		_clock_origin = float(Atis.minutes_since(
+			str(field.get("clock_start", "0000")), 0.0))
+	return _clock_origin
+
+
+## 计划第 i 条的"可以申请时刻"（当日分钟）。没有 std 返回 -1。
+## 每条只算一次（含 0–10 秒抖动），同一次运行里结果稳定。
+func plan_request_minute(i: int) -> float:
+	if i < 0 or i >= plan.size():
+		return -1.0
+	var pe: Dictionary = plan[i]
+	if pe.has("_req_min"):
+		return float(pe["_req_min"])
+	var std := str(pe.get("std", ""))
+	if std.length() != 4 or not std.is_valid_int():
+		pe["_req_min"] = -1.0
+		return -1.0
+	var m := float(int(std.substr(0, 2)) * 60 + int(std.substr(2, 2)))
+	var jitter := rng.randf_range(0.0, 10.0) / 60.0
+	var req := m - lead_minutes + jitter
+	pe["_req_min"] = req
+	return req
 
 
 ## 挑一个没被占用的机位。
