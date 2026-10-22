@@ -105,29 +105,14 @@ func close() -> void:
 
 
 func _make_button(text: String) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.custom_minimum_size = Vector2(150, 46)
-	b.add_theme_font_override("font", AtcTheme.font(500))
-	b.add_theme_font_size_override("font_size", AtcTheme.fs(17))
-	b.add_theme_color_override("font_color", AtcTheme.C_TEXT)
-	b.add_theme_color_override("font_hover_color", AtcTheme.C_ACCENT)
-	b.add_theme_color_override("font_focus_color", AtcTheme.C_ACCENT)
-
-	var n := StyleBoxFlat.new()
-	n.bg_color = Color(1, 1, 1, 0.06)
-	n.border_color = Color(1, 1, 1, 0.16)
-	n.set_border_width_all(1)
-	n.set_corner_radius_all(3)
-	n.content_margin_left = 14
-	n.content_margin_right = 14
-	n.content_margin_top = 10
-	n.content_margin_bottom = 10
-	b.add_theme_stylebox_override("normal", n)
-
-	var h := n.duplicate() as StyleBoxFlat
-	h.bg_color = Color(1, 1, 1, 0.13)
-	h.border_color = AtcTheme.C_ACCENT_DIM
-	b.add_theme_stylebox_override("hover", h)
-	b.add_theme_stylebox_override("focus", h)
+	# 对话框按钮统一走 UiKit：确认=主操作、取消=次操作、删除/放弃=危险
+	var low := text
+	var b: Button
+	if low.contains("删除") or low.contains("放弃") or low.contains("退出"):
+		b = UiKit.danger(text)
+	elif low.contains("取消") or low.contains("关闭") or low == "否":
+		b = UiKit.secondary(text)
+	else:
+		b = UiKit.primary(text)
+	b.custom_minimum_size.x = 150.0 * AtcTheme.UI_SCALE
 	return b

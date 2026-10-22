@@ -90,7 +90,7 @@ func _ready() -> void:
 
 	_back = Button.new()
 	_back.text = "返回  (ESC)"
-	_back.custom_minimum_size = Vector2(0, 44)
+	_back.custom_minimum_size = Vector2(0, 40.0 * AtcTheme.UI_SCALE)
 	_back.add_theme_font_override("font", AtcTheme.font(500))
 	_back.add_theme_font_size_override("font_size", AtcTheme.fs(19))
 	_back.add_theme_color_override("font_color", AtcTheme.C_TEXT)

@@ -120,7 +120,7 @@ func _ready() -> void:
 
 	_back = Button.new()
 	_back.text = "返回  (ESC)"
-	_back.custom_minimum_size = Vector2(0, 42)
+	_back.custom_minimum_size = Vector2(0, 40.0 * AtcTheme.UI_SCALE)
 	_back.add_theme_font_override("font", AtcTheme.font(500))
 	_back.add_theme_font_size_override("font_size", AtcTheme.fs(19))
 	_back.add_theme_color_override("font_color", AtcTheme.C_TEXT)
@@ -272,7 +272,7 @@ func _on_slot_pressed(slot_id: String, occupied: bool) -> void:
 func _small_button(text: String, color: Color) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(120, 40)
+	b.custom_minimum_size = Vector2(120.0 * AtcTheme.UI_SCALE, 40.0 * AtcTheme.UI_SCALE)
 	b.add_theme_font_override("font", AtcTheme.font(500))
 	b.add_theme_font_size_override("font_size", AtcTheme.fs(16))
 	b.add_theme_color_override("font_color", color)

@@ -79,8 +79,8 @@ func _build() -> void:
 	add_child(center)
 
 	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(780.0 * AtcTheme.UI_SCALE,
-		520.0 * AtcTheme.UI_SCALE)
+	card.custom_minimum_size = Vector2(820.0 * AtcTheme.UI_SCALE,
+		640.0 * AtcTheme.UI_SCALE)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.035, 0.050, 0.060, 0.998)
 	sb.border_color = Color(1, 1, 1, 0.14)
@@ -165,15 +165,14 @@ func _build() -> void:
 	foot.custom_minimum_size = Vector2(0, 58.0 * AtcTheme.UI_SCALE)
 	rootbox.add_child(foot)
 	foot.add_child(_pad(18))
-	var reset := _small_button("恢复默认设置")
+	var reset := UiKit.ghost("恢复默认设置")
 	reset.pressed.connect(func() -> void: action.emit("reset"))
 	foot.add_child(reset)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	foot.add_child(spacer)
-	var close_btn := _small_button("关闭")
-	close_btn.custom_minimum_size = Vector2(110.0 * AtcTheme.UI_SCALE,
-		32.0 * AtcTheme.UI_SCALE)
+	var close_btn := UiKit.primary("关闭")
+	close_btn.custom_minimum_size.x = 120.0 * AtcTheme.UI_SCALE
 	close_btn.pressed.connect(close)
 	foot.add_child(close_btn)
 	foot.add_child(_pad(18))

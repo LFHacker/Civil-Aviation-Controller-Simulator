@@ -72,6 +72,7 @@ var _rb_spoken := ""
 ## 语音辅助（08 §4.4）：参考面板卡片、示例朗读按钮
 var _info_card: PanelContainer
 var _voice_demo_btn: Button
+var _atis_top_row: HBoxContainer
 var _dep_card: PanelContainer
 var _dep_grid: GridContainer
 var _dep_taxi_btn: Button
@@ -424,14 +425,16 @@ func _build_strips(parent: HBoxContainer) -> void:
 	_pending_box.add_theme_constant_override("separation", 5)
 	scroll.add_child(_pending_box)
 
+	# 计数与「整理进程单」并排：这个按钮是对列表的操作，不该和计数各占一行
+	var foot_row := UiKit.hbox()
+	left.add_child(foot_row)
 	_done_count = _label("已放行 0 架", 12, 400, AtcTheme.C_TEXT_FAINT)
-	left.add_child(_done_count)
-
-	# 整理进程单（规范 §4.2）：一键按计划时刻重排，2 秒冷却
-	_tidy_btn = _action_button("整理进程单", AtcTheme.C_TEXT_SOFT)
-	_tidy_btn.custom_minimum_size = Vector2(0, 28.0 * AtcTheme.UI_SCALE)
+	_done_count.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_done_count.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	foot_row.add_child(_done_count)
+	_tidy_btn = UiKit.ghost("整理进程单")
 	_tidy_btn.pressed.connect(_on_tidy)
-	left.add_child(_tidy_btn)
+	foot_row.add_child(_tidy_btn)
 
 
 func _build_display(parent: HBoxContainer) -> void:
@@ -489,39 +492,37 @@ func _build_editor(parent: HBoxContainer) -> void:
 	egrid.add_theme_constant_override("separation", 7)
 	_editor.add_child(egrid)
 
+	# 参数是"标签在上、控件在下"的两列网格：一列排到底会拉得很长，
+	# 两列既省高度，也让"程序/高度"、"气压/编码"这种成对的项靠在一起。
+	var fgrid := GridContainer.new()
+	fgrid.columns = 2
+	fgrid.add_theme_constant_override("h_separation", 14)
+	fgrid.add_theme_constant_override("v_separation", 9)
+	egrid.add_child(fgrid)
+
 	_sid_opt = OptionButton.new()
-	_sid_opt.custom_minimum_size = Vector2(190.0 * AtcTheme.UI_SCALE, 0)
 	for s in DeliveryDesk.SIDS:
 		_sid_opt.add_item(s)
 	_sid_opt.item_selected.connect(func(_i: int) -> void: _update_preview())
-	egrid.add_child(_field_row("离场程序", _sid_opt))
-
-	# 许可界限与航路来自飞行计划，管制员照读、不手填
-	_limit_label = _readonly_value("—")
-	egrid.add_child(_field_row("许可界限", _limit_label))
-	_route_label = _readonly_value("—")
-	egrid.add_child(_field_row("航路", _route_label))
+	fgrid.add_child(_field_cell("离场程序", _sid_opt))
 
 	_alt_opt = OptionButton.new()
-	_alt_opt.custom_minimum_size = Vector2(190.0 * AtcTheme.UI_SCALE, 0)
 	for a in DeliveryDesk.ALT_OPTIONS:
 		_alt_opt.add_item("%d 米" % a)
 	_alt_opt.item_selected.connect(func(_i: int) -> void: _update_preview())
-	egrid.add_child(_field_row("初始高度", _alt_opt))
+	fgrid.add_child(_field_cell("初始高度", _alt_opt))
 
 	# 修正海压：机组抄收了 ATIS 也不能省 —— 必须由管制员在许可里确认
 	# （《民用航空空中交通管理规则》第二百九十四条）
 	_qnh_value = _label("—", 15, 700, AtcTheme.C_TEXT)
-	_qnh_btn = _action_button("确认 QNH", AtcTheme.C_WARM)
-	_qnh_btn.custom_minimum_size = Vector2(112.0 * AtcTheme.UI_SCALE,
-		30.0 * AtcTheme.UI_SCALE)
-	_qnh_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_qnh_btn = UiKit.warm("确认 QNH")
+	_qnh_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
 	_qnh_btn.pressed.connect(_on_confirm_qnh)
 	var qh := HBoxContainer.new()
-	qh.add_theme_constant_override("separation", 10)
+	qh.add_theme_constant_override("separation", 8)
 	qh.add_child(_qnh_value)
 	qh.add_child(_qnh_btn)
-	egrid.add_child(_field_row("修正海压", qh))
+	fgrid.add_child(_field_cell("修正海压", qh))
 
 	_squawk_edit = LineEdit.new()
 	_squawk_edit.max_length = 4
@@ -543,7 +544,13 @@ func _build_editor(parent: HBoxContainer) -> void:
 	lf.border_color = AtcTheme.C_ACCENT_DIM
 	_squawk_edit.add_theme_stylebox_override("focus", lf)
 	_squawk_edit.text_changed.connect(_on_squawk_changed)
-	egrid.add_child(_field_row("应答机", _squawk_edit))
+	fgrid.add_child(_field_cell("应答机", _squawk_edit))
+
+	# 许可界限与航路来自飞行计划，管制员照读、不手填；放在最后一对格子里
+	_limit_label = _readonly_value("—")
+	fgrid.add_child(_field_cell("许可界限", _limit_label))
+	_route_label = _readonly_value("—")
+	fgrid.add_child(_field_cell("航路", _route_label))
 
 	# 将要发出的整条通话预览：许可七项 + 离场情报
 	_preview = _label("", 12, 400, AtcTheme.C_TEXT_DIM)
@@ -552,19 +559,19 @@ func _build_editor(parent: HBoxContainer) -> void:
 	egrid.add_child(_section_line("将要发出"))
 	egrid.add_child(_preview)
 
-	var action_row := HBoxContainer.new()
-	action_row.add_theme_constant_override("separation", 10)
+	# 主操作独占一行：一屏只该有一个"最重的按钮"
+	var action_row := UiKit.hbox()
 	egrid.add_child(action_row)
-
-	_issue_btn = _action_button("发放行许可", AtcTheme.C_ACCENT)
+	_issue_btn = UiKit.primary("发放行许可")
+	_issue_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_issue_btn.pressed.connect(_on_issue)
 	action_row.add_child(_issue_btn)
 
+	# 提示文字放到按钮下方整行，不再和按钮抢宽度
 	_hint = _label("", 13, 400, AtcTheme.C_TEXT_DIM)
-	_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	action_row.add_child(_hint)
+	egrid.add_child(_hint)
 
 	# 预设一键模式（规范 §5.1 模式 A）：08 的简易对话就是"点一条候选"
 	_cand_box = VBoxContainer.new()
@@ -580,7 +587,7 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_text_edit.add_theme_font_override("font", AtcTheme.font(400))
 	_text_edit.add_theme_font_size_override("font_size", AtcTheme.fs(13))
 	_text_row.add_child(_text_edit)
-	_text_btn = _action_button("按文本发布", AtcTheme.C_ACCENT)
+	_text_btn = _action_button("按文本发布", AtcTheme.C_TEXT_SOFT)
 	_text_btn.custom_minimum_size = Vector2(120.0 * AtcTheme.UI_SCALE,
 		30.0 * AtcTheme.UI_SCALE)
 	_text_btn.pressed.connect(_on_issue_text)
@@ -594,7 +601,7 @@ func _build_editor(parent: HBoxContainer) -> void:
 	var vrow := HBoxContainer.new()
 	vrow.add_theme_constant_override("separation", 10)
 	_voice_row.add_child(vrow)
-	_voice_btn = _action_button("按下通话", AtcTheme.C_ACCENT)
+	_voice_btn = _action_button("按下通话", AtcTheme.C_WARM)
 	_voice_btn.custom_minimum_size = Vector2(150.0 * AtcTheme.UI_SCALE,
 		34.0 * AtcTheme.UI_SCALE)
 	_voice_btn.focus_mode = Control.FOCUS_NONE
@@ -608,12 +615,10 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_voice_text = _label("", 12, 400, AtcTheme.C_TEXT_SOFT)
 	_voice_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_voice_row.add_child(_voice_text)
-	# §4.4「通话模板朗读」：只示范，不发送
-	_voice_demo_btn = _action_button("听示例", AtcTheme.C_TEXT_SOFT)
-	_voice_demo_btn.custom_minimum_size = Vector2(0, 28.0 * AtcTheme.UI_SCALE)
-	_voice_demo_btn.focus_mode = Control.FOCUS_NONE
+	# §4.4「通话模板朗读」：只示范、不发送 —— 行内小按钮，不占一整行
+	_voice_demo_btn = UiKit.ghost("听示例")
 	_voice_demo_btn.pressed.connect(_on_voice_demo)
-	_voice_row.add_child(_voice_demo_btn)
+	vrow.add_child(_voice_demo_btn)
 
 	# 机组漏报通播时的提示卡（第一百五十九条：建立联络应当表明已收到通播）
 	_atis_card = PanelContainer.new()
@@ -708,10 +713,9 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_handoff_grid.add_theme_constant_override("v_separation", 4)
 	hcol.add_child(_handoff_grid)
 
-	# 底部留白把机场信息卡顶到最下面，跟真实席位的固定信息区一样
-	var filler := Control.new()
-	filler.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	right.add_child(filler)
+	# 不再用"撑高留白"把信息卡顶到底部：隐藏的卡片收起来后会变成
+	# 一列中间的空洞（右侧面板看上去像少了一块）。改成老老实实往上排，
+	# 多余的高度留在整列最下面。
 
 	# 离场情报（规范 §5.2）：机组没抄 ATIS 时逐项通报
 	_dep_card = PanelContainer.new()
@@ -776,27 +780,22 @@ func _build_editor(parent: HBoxContainer) -> void:
 	atis_col.add_child(_atis_state_label)
 	_atis_lamp = _label("", 11, 500, AtcTheme.C_WARM)
 	atis_col.add_child(_atis_lamp)
-	_atis_update_btn = _action_button("按实况更新通播", AtcTheme.C_ACCENT)
-	_atis_update_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
+	_atis_update_btn = UiKit.primary("按实况更新通播")
 	_atis_update_btn.pressed.connect(_on_update_atis)
-	atis_col.add_child(_atis_update_btn)
 
 	# 编辑通播（规范 §3.2）：可逐项选值，选错就会传导成特情
-	_atis_edit_btn = _action_button("编辑通播…", AtcTheme.C_TEXT_SOFT)
-	_atis_edit_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
+	_atis_edit_btn = UiKit.secondary("编辑通播…")
 	_atis_edit_btn.pressed.connect(_on_edit_atis)
-	atis_col.add_child(_atis_edit_btn)
+	_atis_top_row = UiKit.equal_row(atis_col, [_atis_update_btn, _atis_edit_btn])
 
 	_atis_fix_row = HBoxContainer.new()
 	_atis_fix_row.add_theme_constant_override("separation", 8)
 	atis_col.add_child(_atis_fix_row)
-	_atis_notify_btn = _action_button("通知最新通播", AtcTheme.C_WARM)
-	_atis_notify_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
+	_atis_notify_btn = UiKit.warm("通知最新通播")
 	_atis_notify_btn.pressed.connect(_on_notify_atis)
-	_atis_fix_row.add_child(_atis_notify_btn)
-	_atis_report_btn = _action_button("逐项通报变化", AtcTheme.C_TEXT_SOFT)
-	_atis_report_btn.custom_minimum_size = Vector2(0, 30.0 * AtcTheme.UI_SCALE)
+	_atis_report_btn = UiKit.secondary("逐项通报变化")
 	_atis_report_btn.pressed.connect(_on_report_atis)
+	_atis_fix_row.add_child(_atis_notify_btn)
 	_atis_fix_row.add_child(_atis_report_btn)
 
 	var info := PanelContainer.new()
@@ -861,6 +860,17 @@ func _label(text: String, size: int, weight: int, color: Color) -> Label:
 	return lb
 
 
+## 两列网格用的字段格子：小标题在上、控件在下，整格等宽
+func _field_cell(caption: String, field: Control) -> Control:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 3)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(_label(caption, 11, 400, AtcTheme.C_TEXT_FAINT))
+	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(field)
+	return box
+
+
 func _field_row(caption: String, field: Control) -> HBoxContainer:
 	var r := HBoxContainer.new()
 	r.add_theme_constant_override("separation", 10)
@@ -903,31 +913,12 @@ func _update_preview() -> void:
 	_preview.text = body + ((" " + info + "。") if info != "" else "")
 
 
+## 按钮统一走 UiKit 的四档层级（主操作 / 次操作 / 暖色次操作 / 行内），
+## 这里只按语义色挑档，不再各自调像素 —— 以前十几个按钮全是 38px 全宽同色，
+## 主操作和「整理进程单」看起来一样重。
 func _action_button(text: String, color: Color) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.custom_minimum_size = Vector2(0, 38.0 * AtcTheme.UI_SCALE)
+	var b := UiKit.by_color(text, color)
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.add_theme_font_override("font", AtcTheme.font(500))
-	b.add_theme_font_size_override("font_size", AtcTheme.fs(15))
-	b.add_theme_color_override("font_color", AtcTheme.C_TEXT)
-	b.add_theme_color_override("font_hover_color", color)
-	b.add_theme_color_override("font_focus_color", color)
-	var n := StyleBoxFlat.new()
-	n.bg_color = Color(1, 1, 1, 0.06)
-	n.border_color = Color(1, 1, 1, 0.16)
-	n.set_border_width_all(1)
-	n.set_corner_radius_all(3)
-	n.content_margin_left = 12
-	n.content_margin_right = 12
-	n.content_margin_top = 8
-	n.content_margin_bottom = 8
-	b.add_theme_stylebox_override("normal", n)
-	var h := n.duplicate() as StyleBoxFlat
-	h.bg_color = Color(1, 1, 1, 0.13)
-	h.border_color = color
-	b.add_theme_stylebox_override("hover", h)
-	b.add_theme_stylebox_override("focus", h)
 	return b
 
 
@@ -1403,6 +1394,9 @@ func _refresh_detail() -> void:
 	_refresh_dep_info(f)
 	_maybe_speak_readback(f)
 	# 四种发布模式（规范 §5.1 + 08 §4 高级模式）：只有当前模式对应的控件可见
+	# 高级模式（08 §4.5）：通话必须用语音说，不提供"点一下就发出去"的后门。
+	# 移交也走语音，所以这里整体隐藏；语音行在 CLEARED 状态同样可用。
+	_issue_btn.visible = desk.issue_mode != "voice"
 	_cand_box.visible = desk.issue_mode == "preset" and can_issue
 	# 高级模式默认不给文本备用（§4.5），只有打开无障碍开关才放出文本框
 	var text_ok := desk.issue_mode == "text" \
@@ -1414,7 +1408,8 @@ func _refresh_detail() -> void:
 	if _voice_row != null:
 		# 语音模式在"可发放行"或"等复诵"时都要能说话：前者说许可，后者复诵识别
 		_voice_row.visible = desk.issue_mode == "voice" and \
-			(can_issue or f.state == Flight.State.READBACK)
+			(can_issue or f.state == Flight.State.READBACK \
+				or (f.state == Flight.State.CLEARED and not f.handed_off))
 		if _voice_row.visible:
 			_refresh_voice_label(f)
 			_voice_text.visible = VoiceMode.aux_enabled(desk.voice_aux, "transcript")

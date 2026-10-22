@@ -183,7 +183,7 @@ func _make_item(item: Dictionary, index: int) -> Button:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.flat = true
 	btn.focus_mode = Control.FOCUS_ALL
-	btn.custom_minimum_size = Vector2(0, 54)
+	btn.custom_minimum_size = Vector2(0, 52.0 * AtcTheme.UI_SCALE)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 
 	btn.add_theme_font_override("font", AtcTheme.font(500))
