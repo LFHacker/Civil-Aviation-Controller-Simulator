@@ -71,6 +71,13 @@ var _vp: VoicePlayer
 var _rb_spoken := ""
 ## 通话记录里已经播到第几条（新句子按顺序播，历史不重播）
 var _spoken_upto := 0
+## 神经 TTS（IndexTTS2 本地服务）：开了才走，连不上就退回片段库
+var _tts: VoiceTts
+var _tts_ok := false
+var _tts_checked := false
+var _tts_busy := false
+var _tts_queue: Array = []
+var _tts_player: AudioStreamPlayer
 ## 语音辅助（08 §4.4）：参考面板卡片、示例朗读按钮
 var _info_card: PanelContainer
 var _voice_demo_btn: Button
@@ -1674,15 +1681,67 @@ func _play_pending_voices() -> void:
 		return
 	if _spoken_upto >= desk.transcript.size():
 		return
-	var vp := _ensure_player()
-	vp.enabled = true
 	while _spoken_upto < desk.transcript.size():
 		var row: Dictionary = desk.transcript[_spoken_upto]
 		_spoken_upto += 1
-		if not row.has("voice"):
-			continue
+		if row.has("voice"):
+			_tts_queue.append(row)
+	if not _tts_queue.is_empty() and not _tts_busy:
+		_drain_voice_queue()
+
+
+## 一句话一句话地播：优先用本地神经 TTS（IndexTTS2），
+## 没开或服务连不上就退回原来的片段库。两条路都失败就安静跳过。
+func _drain_voice_queue() -> void:
+	_tts_busy = true
+	while not _tts_queue.is_empty():
+		var row: Dictionary = _tts_queue.pop_front()
 		var role := "pilot" if String(row.get("side", "")) == "pilot" else "controller"
-		vp.enqueue(row["voice"], role)
+		var played := await _speak_via_tts(row, role)
+		if not played:
+			var vp := _ensure_player()
+			vp.enabled = true
+			vp.enqueue(row["voice"], role)
+			# 片段库是同步排队的，等它播完再处理下一句，避免两条叠在一起
+			await vp.finished
+	_tts_busy = false
+
+
+func _speak_via_tts(row: Dictionary, role: String) -> bool:
+	if desk == null or not desk.tts_enabled:
+		return false
+	if _tts == null:
+		_tts = VoiceTts.new()
+		_tts.name = "VoiceTts"
+		add_child(_tts)
+	if not _tts_checked:
+		_tts_checked = true
+		var h: Dictionary = await _tts.health()
+		_tts_ok = bool(h.get("ok", false))
+		if not _tts_ok:
+			_tts.last_error = String(h.get("error", "服务不可用"))
+	if not _tts_ok:
+		return false
+	var text := String(row.get("text", ""))
+	var kind := VoiceTts.kind_of_line(String(row.get("side", "")), text)
+	var stream: AudioStreamWAV = await _tts.synthesize(text, role, kind)
+	if stream == null:
+		return false
+	await _play_tts_stream(stream)
+	return true
+
+
+func _play_tts_stream(stream: AudioStreamWAV) -> void:
+	if _tts_player == null:
+		_tts_player = AudioStreamPlayer.new()
+		_tts_player.name = "TtsPlayer"
+		add_child(_tts_player)
+	_tts_player.stream = stream
+	_tts_player.play()
+	# 等这一句播完；没有 finished（音频设备异常）就按流长兜底
+	var deadline := Time.get_ticks_msec() + int(stream.get_length() * 1000.0) + 500
+	while _tts_player.playing and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
 
 
 func _refresh_log() -> void:

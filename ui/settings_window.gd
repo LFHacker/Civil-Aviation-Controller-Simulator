@@ -249,6 +249,9 @@ func _build_voice() -> void:
 	_section("朗读与识别")
 	var lib := VoiceLibrary.new()
 	var ready := bool(lib.ready_for("controller") and lib.ready_for("pilot"))
+	_toggle_row("神经语音（IndexTTS2 本地服务）",
+		desk != null and desk.tts_enabled, "tts",
+		"实时合成、可按情绪调节；服务连不上就自动退回片段库")
 	_toggle_row("语音播报（机组与管制发声）",
 		desk != null and desk.speak_enabled, "speak",
 		"打开后发许可会读出来、复诵到点也会读" if ready
