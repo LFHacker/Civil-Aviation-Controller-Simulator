@@ -62,6 +62,19 @@ func play(ids: Array, role: String = "controller") -> bool:
 	return true
 
 
+## 追加到队尾（通话记录里的句子要按顺序播，不能互相打断）
+func enqueue(ids: Array, role: String = "controller") -> bool:
+	if not enabled:
+		return false
+	var plan := library.plan(ids, role)
+	if plan.is_empty():
+		return false
+	if not _playing:
+		return play(ids, role)
+	_queue.append_array(plan)
+	return true
+
+
 func stop() -> void:
 	_queue.clear()
 	_playing = false

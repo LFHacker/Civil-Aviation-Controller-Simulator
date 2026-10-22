@@ -448,7 +448,10 @@ func _load_game_settings() -> void:
 	d.issue_mode = str(cfg.get_value("game", "issue_mode", d.issue_mode))
 	_next_issue_mode = d.issue_mode
 	d.candidate_error = bool(cfg.get_value("game", "candidate_error", d.candidate_error))
-	d.speak_enabled = bool(cfg.get_value("game", "speak_enabled", d.speak_enabled))
+	# 片段库生成过的话，语音播报默认打开 —— 否则玩家永远听不到机组开口
+	var lib := VoiceLibrary.new()
+	var have_voice := bool(lib.ready_for("controller") and lib.ready_for("pilot"))
+	d.speak_enabled = bool(cfg.get_value("game", "speak_enabled", have_voice))
 	d.allow_text_fallback = bool(cfg.get_value("game", "allow_text_fallback",
 		d.allow_text_fallback))
 	var aux: Variant = cfg.get_value("game", "voice_aux", d.voice_aux)

@@ -175,6 +175,13 @@ static func handoff(callsign_code: String, ground_freq: String) -> Array:
 	return out
 
 
+## 一句"呼号 + 固定短语"的话：复诵正确、许可不完整、没听清……
+static func simple(code: String, phrase_id: String) -> Array:
+	if not FIXED_PHRASES.has(phrase_id):
+		return callsign(code)
+	return callsign(code) + [PHRASE_PREFIX + phrase_id]
+
+
 ## 进离场程序：有中文读法就用专门片段，没有就退回逐位读（宁可少念不乱念）
 ##
 ## ⚠️ 工程里存的是 "RUMUK 8D"（带空格），读法表的键是 "RUMUK8D"。

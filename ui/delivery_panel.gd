@@ -69,6 +69,8 @@ var _voice_busy := false
 ## 语音播报（08 §4「说」）
 var _vp: VoicePlayer
 var _rb_spoken := ""
+## 通话记录里已经播到第几条（新句子按顺序播，历史不重播）
+var _spoken_upto := 0
 ## 语音辅助（08 §4.4）：参考面板卡片、示例朗读按钮
 var _info_card: PanelContainer
 var _voice_demo_btn: Button
@@ -933,6 +935,7 @@ func open(p_desk: DeliveryDesk) -> void:
 	var pend := desk.pending()
 	if not pend.is_empty():
 		_selected = (pend[0] as Flight).callsign
+	_spoken_upto = maxi(0, desk.transcript.size() - 3)
 	_sync_tabs()
 	refresh()
 
@@ -1072,6 +1075,7 @@ func refresh() -> void:
 	_refresh_list()
 	_refresh_detail()
 	_refresh_log()
+	_play_pending_voices()
 	_refresh_atis()
 	_display.set_selected(_selected)
 	_display.queue_redraw()
@@ -1392,7 +1396,6 @@ func _refresh_detail() -> void:
 	_update_preview()
 	_refresh_handoff(f)
 	_refresh_dep_info(f)
-	_maybe_speak_readback(f)
 	# 四种发布模式（规范 §5.1 + 08 §4 高级模式）：只有当前模式对应的控件可见
 	# 高级模式（08 §4.5）：通话必须用语音说，不提供"点一下就发出去"的后门。
 	# 移交也走语音，所以这里整体隐藏；语音行在 CLEARED 状态同样可用。
@@ -1663,6 +1666,25 @@ func _on_report_atis() -> void:
 	refresh()
 
 
+## 通话记录里凡是有 voice 片段的新句子，按顺序播出去。
+## 这样"机组申请、管制许可、机组复诵、管制确认"全都会发声，
+## 而不是只有发许可那一刻响一下。
+func _play_pending_voices() -> void:
+	if desk == null or not desk.speak_enabled:
+		return
+	if _spoken_upto >= desk.transcript.size():
+		return
+	var vp := _ensure_player()
+	vp.enabled = true
+	while _spoken_upto < desk.transcript.size():
+		var row: Dictionary = desk.transcript[_spoken_upto]
+		_spoken_upto += 1
+		if not row.has("voice"):
+			continue
+		var role := "pilot" if String(row.get("side", "")) == "pilot" else "controller"
+		vp.enqueue(row["voice"], role)
+
+
 func _refresh_log() -> void:
 	for c in _log_box.get_children():
 		c.queue_free()
@@ -1796,12 +1818,6 @@ func _handle_issue_result(r: Dictionary) -> void:
 		_hint.text = String(r.error)
 		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 		return
-	# 真发出去了才朗读（08 §4「说」）：许可是管制自己说的那一句
-	var f := desk.get_flight(_selected)
-	if f != null and bool(r.ok) and not bool(r.get("queried", false)):
-		_speak(Voice.clearance(f.callsign, f.sid,
-			f.clearance_limit if f.clearance_limit != "" else f.destination,
-			f.initial_alt_m, f.squawk, int(desk.field.get("qnh", 0))), "controller")
 	refresh()
 	if bool(r.get("queried", false)):
 		_hint.text = String(r.error)
@@ -1934,7 +1950,6 @@ func _speak(ids: Array, role: String) -> void:
 	vp.play(ids, role)
 
 
-## 选中航班的复诵到点后自动读一遍（每份复诵只读一次）
 func _maybe_speak_readback(f: Flight) -> void:
 	if f == null or f.state != Flight.State.READBACK:
 		_rb_spoken = ""

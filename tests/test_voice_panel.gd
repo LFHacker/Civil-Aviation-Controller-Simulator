@@ -128,42 +128,46 @@ func _check_modes() -> void:
 
 
 func _check_speak() -> void:
-	_section("语音播报（说）：开关与去重")
+	_section("语音播报（说）：通话记录驱动")
 	var lib := VoiceLibrary.new()
-	var has_lib := lib.ready_for("controller")
+	var has_lib := bool(lib.ready_for("controller") and lib.ready_for("pilot"))
 	# 关着的时候绝不能播
 	_desk.speak_enabled = false
-	_panel._speak(Voice.clearance("ISS001", "RUMUK 8D", "ZBAA", 6000, "4321", 1013),
-		"controller")
+	_panel._spoken_upto = 0
+	_panel._play_pending_voices()
 	_check(_panel._vp == null, "开关关闭时不创建播放器（不偷偷播）")
 	if not has_lib:
-		print("    （本机没生成片段库，只验开关；"
-			+ "python tools/gen_voice.py 后还会验取件）")
-		_check(not lib.ready_for("controller"), "没有片段库时明确未就绪")
-		# 即使打开开关，没有片段也不能报错
+		print("    （本机没生成片段库，只验开关与降级）")
 		_desk.speak_enabled = true
-		_panel._speak(Voice.clearance("ISS001", "RUMUK 8D", "ZBAA", 6000, "4321", 1013),
-			"controller")
-		_check(true, "没有片段库时播报静默降级（不崩）")
+		_panel._play_pending_voices()
+		_check(true, "没有片段库时静默降级（不崩）")
 		return
-	# 打开后：许可应该取得到片段
-	_desk.speak_enabled = true
-	var ids := Voice.clearance("ISS001", "RUMUK 8D", "ZBAA", 6000, "4321", 1013)
-	_check(not lib.plan(ids, "controller").is_empty(), "许可片段取得全",
-		str(ids.size()))
-	_panel._speak(ids, "controller")
-	_check(_panel._vp != null and _panel._vp.enabled, "开关打开后播放器就位")
-	# 同一份复诵只读一次
-	var f := _desk.get_flight("ISS001")
-	f.state = Flight.State.READBACK
-	f.readback_at = 12.5
-	_panel._maybe_speak_readback(f)
-	var first := String(_panel._rb_spoken)
-	_check(first != "", "复诵会触发播报", first)
-	_panel._maybe_speak_readback(f)
-	_check(String(_panel._rb_spoken) == first, "同一份复诵不会重复读",
-		String(_panel._rb_spoken))
 
+	# 机组首次申请必须带 voice 片段 —— 这正是"从来没听到申请"的根因
+	var req := {}
+	for row in _desk.transcript:
+		var d: Dictionary = row
+		if String(d.get("side", "")) == "pilot" and String(d.get("text", "")).contains("申请放行"):
+			req = d
+			break
+	_check(not req.is_empty(), "开局有申请通话")
+	_check(req.has("voice"), "申请通话带语音片段", str(req.keys()))
+	if req.has("voice"):
+		var ids: Array = req["voice"]
+		_check(ids.size() > 4, "申请片段足够念一句完整话", str(ids.size()))
+		_check(not lib.plan(ids, "pilot").is_empty(), "申请片段取得全")
+
+	# 打开开关后，新句子会被排进播放队列
+	_desk.speak_enabled = true
+	_panel._spoken_upto = 0
+	var total := _desk.transcript.size()
+	_panel._play_pending_voices()
+	_check(_panel._vp != null, "开关打开后播放器就位")
+	_check(_panel._spoken_upto == total, "播完了所有已读句子",
+		"%d/%d" % [_panel._spoken_upto, total])
+	# 再调一次不会重复播（游标已到末尾）
+	_panel._play_pending_voices()
+	_check(_panel._spoken_upto == total, "不会重复播历史")
 
 func _check_aux() -> void:
 	_section("语音辅助（§4.4 / §4.5）")

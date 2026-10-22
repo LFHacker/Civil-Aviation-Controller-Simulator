@@ -254,13 +254,16 @@ func spawn_request(sim_time: float, callsign: String = "") -> Flight:
 	flights.append(f)
 
 	var alpha := str(field.get("atis_alpha", "A"))
+	# 机组第一次呼叫：这句话必须真的念出来（玩家最常抱怨"从来没听到申请"）
+	var say := Voice.request(f.callsign, f.stand, f.destination, f.atis_ok)
 	if f.atis_ok:
 		_log(sim_time, "pilot",
 			"放行，%s，停机位 %s，已收到通播 %s，申请放行至 %s。" % [
-				f.callsign, f.stand, alpha, f.destination])
+				f.callsign, f.stand, alpha, f.destination], say)
 	else:
 		_log(sim_time, "pilot",
-			"放行，%s，停机位 %s，申请放行至 %s。" % [f.callsign, f.stand, f.destination])
+			"放行，%s，停机位 %s，申请放行至 %s。" % [f.callsign, f.stand, f.destination],
+			say)
 	return f
 
 
@@ -1431,7 +1434,7 @@ func issue_free_text(callsign: String, text: String, sim_time: float) -> Diction
 			f.pilot_queries += 1
 			_log(sim_time, "atc", t)
 			_log(sim_time, "pilot",
-				"%s，许可不完整，请重复。" % f.callsign)
+				"%s，许可不完整，请重复。" % f.callsign, Voice.simple(f.callsign, "p_incomplete"))
 			return {"ok": true, "queried": true,
 				"error": "机组质疑：许可不完整，请重复（缺 %s）"
 					% "、".join(PackedStringArray(missing))}
@@ -1466,7 +1469,7 @@ func issue_voice(callsign: String, transcript: String, confidence: float,
 	if action == "unheard":
 		voice_unheard += 1
 		var line := "%s，没听清，请再说一遍。" % f.callsign
-		_log(sim_time, "pilot", line)
+		_log(sim_time, "pilot", line, Voice.simple(f.callsign, "p_say_again"))
 		return {"ok": true, "unheard": true, "line": line,
 			"text": String(dec.get("text", "")),
 			"error": "机组没听清（%s），请重新说" % String(dec.get("reason", ""))}
@@ -1685,7 +1688,7 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 			f.state = Flight.State.PENDING
 			f.t_sent = -1.0
 			f.readback_at = 0.0
-			_log(sim_time, "atc", full_clearance_text(f))
+			_log(sim_time, "atc", full_clearance_text(f), Voice.clearance(f.callsign, f.sid, f.clearance_limit if f.clearance_limit != "" else f.destination, f.initial_alt_m, f.squawk, int(field.get("qnh", 0))))
 			_log(sim_time, "pilot", "%s，%s" % [f.callsign, queries[0]])
 			return {"ok": true, "queried": true,
 				"error": "机组质疑：" + String(queries[0])}
@@ -1700,7 +1703,7 @@ func issue_clearance(callsign: String, sid: String, alt_m: int, squawk: String,
 		f.atis_suspect = true
 	if enable_dep_info:
 		f.dep_info_skipped = dep_info_missing(f)
-	_log(sim_time, "atc", full_clearance_text(f))
+	_log(sim_time, "atc", full_clearance_text(f), Voice.clearance(f.callsign, f.sid, f.clearance_limit if f.clearance_limit != "" else f.destination, f.initial_alt_m, f.squawk, int(field.get("qnh", 0))))
 	return {"ok": true, "error": ""}
 
 
@@ -1934,7 +1937,8 @@ func _generate_readback(f: Flight, sim_time: float) -> void:
 	f.state = Flight.State.READBACK
 	f.t_readback = sim_time
 	f.readback_deadline = sim_time + READBACK_LIMIT if readback_hard else -1.0
-	_log(sim_time, "pilot", text)
+	_log(sim_time, "pilot", text,
+		Voice.readback(f.callsign, sid, limit, alt, squawk, int(field.get("qnh", 0))))
 
 
 ## 逐项比对表（规范 §6.1）。关键项不一致必须拦，非关键项只记录。
@@ -2002,7 +2006,7 @@ func apply_voice_readback(callsign: String, tag: String, confidence: float,
 	if not VoiceMode.confident(confidence, teaching or self.teaching):
 		voice_unheard += 1
 		var line := "%s，没听清，请再说一遍。" % f.callsign
-		_log(sim_time, "pilot", line)
+		_log(sim_time, "pilot", line, Voice.simple(f.callsign, "p_say_again"))
 		last_voice = {"action": "unheard", "reason": "复诵置信度低"}
 		return {"ok": true, "unheard": true, "line": line,
 			"error": "机组复诵没听清，请重新说"}
@@ -2010,7 +2014,7 @@ func apply_voice_readback(callsign: String, tag: String, confidence: float,
 	if not bool(pt.get("known", false)):
 		voice_unheard += 1
 		var line2 := "%s，没听清，请再说一遍。" % f.callsign
-		_log(sim_time, "pilot", line2)
+		_log(sim_time, "pilot", line2, Voice.simple(f.callsign, "p_say_again"))
 		last_voice = {"action": "unheard", "reason": "没识别出是哪一条"}
 		return {"ok": true, "unheard": true, "line": line2,
 			"error": "没听清复诵内容，请重新说"}
@@ -2116,7 +2120,8 @@ func accept_readback(callsign: String, sim_time: float) -> Dictionary:
 	f.ground_ready_at = sim_time + 2.0 + rng.randf() * 3.0
 	f.ground_ready_said = false
 	cleared_count += 1
-	_log(sim_time, "atc", "%s，复诵正确，放行完成，联系地面。" % f.callsign)
+	_log(sim_time, "atc", "%s，复诵正确，放行完成，联系地面。" % f.callsign,
+		Voice.simple(f.callsign, "p_readback_ok"))
 	return {"ok": true, "error": "", "correct": true}
 
 
@@ -2142,14 +2147,20 @@ func reissue(callsign: String, sim_time: float) -> Dictionary:
 	f.t_sent = -1.0
 	f.t_readback = -1.0
 
-	_log(sim_time, "atc", "%s，复诵有误，请重新抄收。" % f.callsign)
+	_log(sim_time, "atc", "%s，复诵有误，请重新抄收。" % f.callsign,
+		Voice.simple(f.callsign, "p_incomplete"))
 	return {"ok": true, "error": "", "was_correct": was_correct}
 
 
 # ---------------------------------------------------------------- 通话记录
 
-func _log(sim_time: float, side: String, text: String) -> void:
-	transcript.append({"t": sim_time, "side": side, "text": text})
+## 记一条通话。voice 是这句话该念的片段 id（由 sim/voice.gd 决定），
+## 表现层只管照着播——"播什么"永远在逻辑层定。
+func _log(sim_time: float, side: String, text: String, voice: Array = []) -> void:
+	var row := {"t": sim_time, "side": side, "text": text}
+	if not voice.is_empty():
+		row["voice"] = voice
+	transcript.append(row)
 	if transcript.size() > TRANSCRIPT_MAX:
 		transcript = transcript.slice(transcript.size() - TRANSCRIPT_MAX)
 
