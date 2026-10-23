@@ -65,6 +65,8 @@ var readback_marks := {}
 var readback_deadline := -1.0
 ## 高阶模式里把不一致项误判为一致的次数（进评分）
 var missed_readback := 0
+## 07 §九：机组被追问正确值的次数（玩家指出读错项但没给值）
+var readback_asks := 0
 ## 移交检查清单里玩家逐项确认过的项（规范 §7.2 高阶模式）
 var handoff_confirmed := {}
 ## 从复诵确认到移交超时（规范 §7.2，影响评分不阻断）
@@ -154,6 +156,9 @@ var qnh_confirmed := false
 
 ## 机组在首次呼叫里报的通播代号；没报就是空串
 var atis_reported := ""
+## 07 §2.3 / §7：机组在申请通话里报告的 ATIS 状态
+## 0 = 报的是现行代号，1 = 根本没抄收（通话里不提通播），2 = 报了个过期代号
+var atis_report := 0
 ## 管制员已就该机组的过期通播做过处置（通知最新通播 / 逐项通报变化）
 var atis_notified := false
 
@@ -211,10 +216,12 @@ func to_dict() -> Dictionary:
 		"slot_delay_min": slot_delay_min,
 		"qnh_confirmed": qnh_confirmed,
 		"atis_reported": atis_reported,
+		"atis_report": atis_report,
 		"readback_items": readback_items.duplicate(true),
 		"readback_marks": readback_marks.duplicate(),
 		"readback_deadline": readback_deadline,
 		"missed_readback": missed_readback,
+		"readback_asks": readback_asks,
 		"handoff_confirmed": handoff_confirmed.duplicate(),
 		"handoff_late": handoff_late,
 		"dep_info_notified": dep_info_notified.duplicate(),
@@ -284,6 +291,7 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.slot_delay_min = int(d.get("slot_delay_min", 0))
 	f.qnh_confirmed = bool(d.get("qnh_confirmed", false))
 	f.atis_reported = str(d.get("atis_reported", ""))
+	f.atis_report = int(d.get("atis_report", 0))
 	f.atis_notified = bool(d.get("atis_notified", false))
 	var ri: Variant = d.get("readback_items", [])
 	f.readback_items = ri if ri is Array else []
@@ -291,6 +299,7 @@ static func from_dict(d: Dictionary) -> Flight:
 	f.readback_marks = rm if rm is Dictionary else {}
 	f.readback_deadline = float(d.get("readback_deadline", -1.0))
 	f.missed_readback = int(d.get("missed_readback", 0))
+	f.readback_asks = int(d.get("readback_asks", 0))
 	var hc: Variant = d.get("handoff_confirmed", {})
 	f.handoff_confirmed = hc if hc is Dictionary else {}
 	f.handoff_late = bool(d.get("handoff_late", false))

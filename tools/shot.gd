@@ -83,8 +83,7 @@ func _dump_tree(n: Node, depth: int) -> void:
 		_dump_tree(ch, depth + 1)
 
 
-func _build_delivery() -> void:
-	_desk = _demo_desk()
+func _mount_delivery_panel() -> void:
 	_panel = DeliveryPanel.new()
 	_panel.name = "DeliveryPanel"
 	root.add_child(_panel)
@@ -93,6 +92,29 @@ func _build_delivery() -> void:
 	if data is Dictionary:
 		_panel.call("set_airport", data)
 	_panel.call("open", _desk)
+
+
+func _build_delivery() -> void:
+	_desk = _demo_desk()
+	_mount_delivery_panel()
+
+
+## 复诵待确认状态（07 §九的"复诵有误"按钮就在这张卡上）：
+## 发一份许可、强制读错一项、把时钟推到复诵到达之后。
+func _build_readback() -> void:
+	_desk = _demo_desk()
+	# 这两道闸门会拦住发放行（QNH 未确认 / 通播过期），截图只关心复诵卡片，先放开
+	_desk.enable_qnh_gate = false
+	_desk.enable_atis_lifecycle = false
+	if not _desk.flights.is_empty():
+		var f: Flight = _desk.flights[0]
+		var r := _desk.issue_clearance(f.callsign, f.sid, f.initial_alt_m, f.squawk, 0.0)
+		if not bool(r.ok):
+			print("!! 发许可失败：" + String(r.error))
+		_desk.force_error_next = true
+		_desk.tick(f.readback_at + 0.1)
+		print("!! state=" + str(f.state) + " items=" + str(f.readback_items.size()))
+	_mount_delivery_panel()
 
 
 func _build_settings() -> void:
@@ -110,6 +132,7 @@ func _process(_dt: float) -> bool:
 	if _frames == 1:
 		match _scene:
 			"delivery": _build_delivery()
+			"readback": _build_readback()
 			"settings": _build_settings()
 			"seat": _build_placeholder("席位选择（未接入截图）")
 			_: _build_delivery()

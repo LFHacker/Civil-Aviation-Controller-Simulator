@@ -20,7 +20,8 @@ const SEAT_ARG := "--seat="
 var _shot_path := ""
 var _shot_time := 1.5
 var _auto_seat := ""
-var _debug_atis_missing := false
+## 调试用的 ATIS 抄收状态：0 不干预 / 1 没抄收 / 2 报过期代号（07 §7）
+var _debug_atis := 0
 var _open_item := ""
 var _auto_load := ""
 var _auto_load_at := 1.0
@@ -58,7 +59,10 @@ func _ready() -> void:
 			_auto_seat = arg.substr(SEAT_ARG.length())
 		elif arg == "--atis-missing":
 			# 调试：强制第一架航班漏报通播，用来验证"要求收听通播"这条分支
-			_debug_atis_missing = true
+			_debug_atis = 1
+		elif arg == "--atis-stale":
+			# 调试：强制第一架航班报了个过期代号（07 §7 高阶档）
+			_debug_atis = 2
 
 	AtcLog.info("管制模拟器 v%s 启动" % AtcVersion.text())
 
@@ -216,9 +220,14 @@ func _boot_session(save: SaveGame, mode: String, seat_id: String, label: String)
 	else:
 		s.apply_airport(ar.data, true)
 
-	if _debug_atis_missing and s.delivery != null and not s.delivery.flights.is_empty():
-		(s.delivery.flights[0] as Flight).atis_ok = false
-		AtcLog.info("调试：强制 %s 漏报通播" % (s.delivery.flights[0] as Flight).callsign)
+	if _debug_atis > 0 and s.delivery != null and not s.delivery.flights.is_empty():
+		var dbg := s.delivery.flights[0] as Flight
+		dbg.atis_report = _debug_atis
+		dbg.atis_ok = false
+		dbg.atis_reported = AtisBroadcast.prev_alpha(s.delivery.atis.alpha) \
+			if _debug_atis == 2 else ""
+		AtcLog.info("调试：强制 %s 的 ATIS 抄收状态 = %d（代号 %s）" % [
+			dbg.callsign, _debug_atis, dbg.atis_reported])
 	var airport_name := str(ar.data.get("name", s.airport_id))
 	var rwy := AirportData.primary_runway(ar.data)
 	_loading.set_airport_line("%s · %s · 主跑道 %s" % [s.airport_id, airport_name, rwy])

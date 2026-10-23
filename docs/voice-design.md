@@ -226,10 +226,24 @@ volume=2.4, alimiter=limit=0.9
 
 ### 2.10 待办
 
-- [ ] 用 IndexTTS2 离线重生成片段库（含情绪），替换 edge-tts 版本
+- [x] 用 IndexTTS2 离线重生成片段库（含情绪），替换 edge-tts 版本
+  —— 机组、管制两套音色都已重生成（各 49 片段，`_meta.engine = indextts2`）
 - [ ] 音色定版后再决定要不要把片段库随包分发（许可证问题）
 - [ ] 多机组音色区分（现在管制一套、机组一套）
 - [ ] 语音只覆盖放行席的四类通话，自由问询（05）还没做
+
+### 2.11 批量生成的实测成本（2026-10-23）
+
+| 项 | 实测 |
+|---|---|
+| 每片段耗时 | 28–31 秒（含 HTTP + 合成 + ffmpeg 转 OGG） |
+| 一套片段库（49 条） | **约 10 分钟**（机组 607 秒；管制同量级） |
+| 磁盘占用 | 约 365 KB / 套（OGG 窄带 + 电台滤波后） |
+| 显存 | 7.8 GB / 8.2 GB，GPU 100%（生成期间别开游戏抢卡） |
+| 断点续跑 | `--resume` 跳过已存在片段；**换引擎时不能有旧文件的目录里用 `--resume`**（会把旧引擎的片段当成已完成） |
+
+批量生成前**必须先清空目标目录**：edge-tts 时代的 49 个 OGG 文件名与新片段 id 完全一样，
+留着它们会让 `--resume` 把整批都跳过（第一轮就踩了这个坑，白等十分钟）。
 
 ---
 
@@ -241,12 +255,28 @@ volume=2.4, alimiter=limit=0.9
 
 ### 3.1 怎么生成片段库
 
+**先起本地 TTS 服务**（IndexTTS2 在 Python 里，Godot 调不动）：
+
 ```powershell
-python tools/gen_voice.py --voice zh-CN-YunxiNeural --out assets\audio\phrases\controller
-python tools/gen_voice.py --voice zh-CN-YunjianNeural --out assets\audio\phrases\pilot
+# 起服务（-Mock 表示不加载模型，只验链路；真生成要去掉 -Mock）
+powershell -ExecutionPolicy Bypass -File tools\start_tts.ps1 -NoWindow
+# 健康检查
+curl http://127.0.0.1:8731/health
 ```
 
+再按角色批量生成（目录里的旧片段要先清掉，见 §2.11）：
+
+```powershell
+.venv-tts\Scripts\python.exe tools\gen_voice_indextts.py --role controller
+.venv-tts\Scripts\python.exe tools\gen_voice_indextts.py --role pilot
+```
+
+片段表（数字/短语/公司/程序/机场）直接读 `sim/voice.gd`，
+所以加一条新短语只需要改那一处，生成脚本自动跟上。
+情绪按片段给：申请/复诵/许可以平静为主，听不懂带意外，读错带一点不悦。
+
 然后选项 →「语音播报」开关会亮起来（没生成时显示「未生成片段」并禁用）。
+旧的 edge-tts 生成脚本 `tools/gen_voice.py` 保留作对照，**不再是主路径**。
 
 ### 3.2 怎么复验
 

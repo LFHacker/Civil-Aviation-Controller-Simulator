@@ -54,17 +54,25 @@ func _desk(difficulty: String = "normal") -> DeliveryDesk:
 
 
 func _test_query() -> void:
-	_section("完整性检查与质疑（§4.4）")
-	var d := _desk()
-	var f := d.get_flight("PLT001")
+	_section("完整性检查与质疑（§4.4 / §7 分级）")
+	# 高度不在协议带：只有高阶模式才查（07 §7「质疑触发」表）
+	var dh := _desk("hard")
+	var fh := dh.get_flight("PLT001")
+	var rh := dh.issue_clearance("PLT001", "RUMUK 8D", 3000, "1234", 0.0)
+	_check(bool(rh.get("queried", false)), "高阶：机组对高度提出质疑", String(rh.error))
+	_check(String(rh.error).contains("高度"), "质疑内容说高度", String(rh.error))
+	_check(fh.state == Flight.State.PENDING, "状态没有推进（不能进入复诵）",
+		str(fh.state))
+	_check(fh.pilot_queries == 1, "质疑计数 +1", str(fh.pilot_queries))
 
-	# 高度不在协议带 → 质疑
-	var r := d.issue_clearance("PLT001", "RUMUK 8D", 3000, "1234", 0.0)
-	_check(bool(r.get("queried", false)), "机组提出质疑", String(r.error))
-	_check(String(r.error).contains("高度"), "质疑内容说高度", String(r.error))
-	_check(f.state == Flight.State.PENDING, "状态没有推进（不能进入复诵）",
-		str(f.state))
-	_check(f.pilot_queries == 1, "质疑计数 +1", str(f.pilot_queries))
+	# 简易/进阶不查高度带：同样的越界高度照发不误
+	var dn := _desk("normal")
+	var rn := dn.issue_clearance("PLT001", "RUMUK 8D", 3000, "1234", 0.0)
+	_check(not bool(rn.get("queried", false)), "进阶不查高度带（07 §7）",
+		String(rn.error))
+	var de := _desk("easy")
+	var re := de.issue_clearance("PLT001", "RUMUK 8D", 3000, "1234", 0.0)
+	_check(not bool(re.get("queried", false)), "简易不查高度带", String(re.error))
 
 	# 应答机被另一架占用 → 质疑
 	var d2 := _desk()
@@ -92,7 +100,7 @@ func _test_query() -> void:
 
 func _test_query_limit() -> void:
 	_section("连续质疑上限（§4.4 防死循环）")
-	var d := _desk()
+	var d := _desk("hard")
 	var f := d.get_flight("PLT001")
 	var q1 := d.issue_clearance("PLT001", "RUMUK 8D", 3000, "1234", 0.0)
 	var q2 := d.issue_clearance("PLT001", "RUMUK 8D", 3000, "1234", 1.0)

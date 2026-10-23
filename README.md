@@ -107,7 +107,7 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 - **自动来航班**：待放行少于 3 架时，每 18 仿真秒来一架新的
 - **席位状态随存档走**：进程单、通话记录、统计都写进 `state.extra["delivery"]`
 
-逻辑在 `sim/delivery_desk.gd`（零界面依赖，55 项断言覆盖），界面在 `ui/delivery_panel.gd`。
+逻辑在 `sim/delivery_desk.gd`（零界面依赖，57 项断言覆盖），界面在 `ui/delivery_panel.gd`。
 
 ### 调试热键
 
@@ -251,7 +251,8 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 **教学引导（08 §10）**：Radio.teaching_hint(mode) 按对话模式给一句话提示，
 显示在放行席提示区（"点下面任意一条候选通话即可发出" / "逐项选好…" / "语音档未接入，用文本代替"）。
 
-⚠️ **语音档（08 §4）**：**「听」已接通到面板，玩家可以按住通话键说话**；「说」已备好片段库与生成脚本，等定音色接播放器。
+**语音档（08 §4）「听」与「说」都已接通**：玩家按住通话键说话、机组会真的念出申请与复诵。
+音色由本地神经 TTS **IndexTTS2**（8 维情绪向量）离线批量生成，运行时零联网零延迟。
 详见 [docs/voice-design.md](docs/voice-design.md) 与 `docs/audio/` 里的试听样本。
 
 **听（已实现）**——不做开放式听写，而是按当前放行内容**现生成闭集语法**：
@@ -285,10 +286,18 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 对照开放式听写是 1047 ms / 置信度 32% 且完全读错。
 识别出的文本还能被逻辑层正确解析成七项要素（这一步单独验过）。
 
-**说（已接播放器）**——**不按整句合成**（要联网要 key），改成 49 条片段拼装 + 电台滤波
-（窄带 300–2700 Hz + 压限），合计 284 KB / 38 s，运行时零延迟零联网。
-逻辑层 `sim/voice.gd` 只输出片段 id，换任何 TTS 引擎都不用改；
-生成脚本 `tools/gen_voice.py`，试听 `tools/dump_voice_plan.gd`（把逻辑层输出 dump 出来拼接）。
+**说（已接播放器）**——**不按整句实时合成**：实测 IndexTTS2 在本机（RTX 4060 8G）
+念一句完整放行许可要 **114–117 秒**，实时用不了；所以改成**离线批量生成 49 条片段**
+（两套音色：管制 / 机组），运行时只做拼装播放 + 电台滤波（窄带 300–2700 Hz + 压限），
+零延迟零联网。逻辑层 `sim/voice.gd` 只输出片段 id 与文本，换任何 TTS 引擎都不用改。
+
+| 层 | 文件 | 作用 |
+|---|---|---|
+| 情绪预设 | `sim/voice_tts.gd` | 8 维情绪（官方顺序 happy/angry/sad/afraid/disgusted/melancholic/surprised/calm）+ 按角色和话条的预设向量 |
+| 服务端 | `tools/tts_server.py` | 本地 HTTP `POST /tts` → WAV；后端 lazy 加载 IndexTTS2；`--mock` 可无模型跑通链路 |
+| 批量生成 | `tools/gen_voice_indextts.py` | 复用 `sim/voice.gd` 的片段表，逐条合成 + ffmpeg 转 OGG + 写 `manifest.json` |
+| 环境安装 | `tools/setup_indextts2.ps1` | 建 venv / 装 cu128 torch（走 SJTU 镜像）/ 拉 7.4 GB 模型 |
+| 启动服务 | `tools/start_tts.ps1` | 生成片段前要先起它；`-Mock` 用于只验链路 |
 
 **玩法上怎么用**：先生成片段库（见 [docs/voice-design.md](docs/voice-design.md) §3.1），
 选项 →「语音播报」开关就会亮起来；打开后发许可会读管制那句、复诵到点会读机组那句
@@ -311,12 +320,17 @@ D:\0.computer\1.Python\Game-chase\_tools\godot\Godot_v4.7.2-stable_win64.exe --p
 - **完整性检查与质疑**：机组收到许可后自查，命中必质疑项就回话质疑，
   状态**不推进**（还是「已申请」），玩家必须改完重发。必质疑项：
   应答机被占用、高度不在协议高度带、离场程序与计划航路不兼容、缺修正海压。
+  **查几项按难度分级**（07 §7）：简易只查 QNH 与编码重复；进阶再加离场程序与计划航路
+  是否兼容；**只有高阶才查「高度是否在协议高度带内」**。
 - **连续质疑上限 2 次**：第三次机组按现有内容接受（避免死循环）。
 - **三次重申请**：没人理时每 60 秒呼叫一次，最多 3 次；之后转「机组等待中」，
   进程单上显示 机组等待中（已呼叫 3 次）。
 - **错误注入按难度**：简易 0% / 进阶 30%（最多 1 处）/ 高阶 60%（最多 2 处）；
   每纠正一次概率减半，连续纠正两次后不再读错。
-- **可复现**：错误注入走 ng，同一 setup(seed) 结果完全一致（有断言守着）。
+- **只指出读错项、不给正确值**（07 §九）：复诵卡上「复诵有误」按钮 → 机组追问
+  「请给出正确的应答机」，**状态保持复诵待确认**（纠错仍只能重发完整许可）。
+  什么都没指就点它，机组反问「请指出是哪一项读错了」。
+- **可复现**：错误注入走 rng，同一 setup(seed) 结果完全一致（有断言守着）。
 
 ⚠️ 目前"质疑"只在**内容**上做（编码/高度/程序/QNH），还没做 07 文档 §4.4 里
 "缺少非 QNH 要素（如漏 SID）"这一类——因为填空式/预设模式结构上不可能漏项，
@@ -353,7 +367,8 @@ Flight.VIS_STATES 落成文档里的九态：地勤中 / 未放行 / 已放行 /
   超时退回「计划已审查」、需重新发布许可。
   把实际不一致的项标成「一致」**不拦截**，但记进 missed_readback（规范 §6.2 原话：
   系统不拦截，后续飞行阶段触发告警）。
-- 纠错一律**重发完整许可**，不能只改一项（现有 eissue 就是这个语义）。
+- 纠错一律**重发完整许可**，不能只改一项（现有 
+eissue 就是这个语义）。
 
 ⚠️ 难度开关目前还没有设置界面，只能通过逻辑层字段切换；设置页会在做「难度分级」时补。
 
@@ -580,7 +595,7 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # 机场数据：30 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_airport.gd
 
-# 放行席逻辑：55 项断言
+# 放行席逻辑：57 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_delivery.gd
 
 # 场面图视图变换（缩放/平移）：17 项断言
@@ -589,7 +604,7 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # 窗口设置（显示模式/尺寸/显示器/配置损坏兜底）：37 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_window.gd
 
-# 教学 / 通话清单 / 地面准备好了 / 九态 / 滑行路线：39 项断言
+# 教学 / 通话清单 / 地面准备好了 / 九态 / 滑行路线：41 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_guide.gd
 
 # 通播编辑/特情/复诵等待：30 项断言
@@ -598,7 +613,7 @@ Godot 的 `JSON.parse_string` 会把**所有数字都读成 float**，于是写�
 # 陆空对话（读法/槽位/候选）：39 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_radio.gd
 
-# 语音片段拼装（说）：41 项断言
+# 语音片段拼装（说，含 SID 空格归一）：42 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice.gd
 
 # 设置窗口（分类导航 / 单选与开关动作）：30 项断言
@@ -613,22 +628,34 @@ powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
 # 识别助手客户端（WAV 写入 / JSON / 双向管道 / 错误路径，无需麦克风）：23 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_asr.gd
 
-# 语音面板（按住通话回调、模式切换、失败路径、播报、辅助开关）：37 项断言
+# 语音面板（按住通话回调、模式切换、失败路径、播报、辅助开关）：40 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_panel.gd
 
 # 语音片段库（缺件降级/角色分库/时长/直接读 OGG）：20 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_voice_library.gd
 
-# AI 驾驶舱（质疑/重申请/错误注入/种子）：32 项断言
+# 本地 TTS 客户端（情绪向量/预设/RIFF 头校验/话条归类，纯逻辑不连服务）：25 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_tts.gd
+
+# TTS 服务端到端（真起服务 + 真合成 + 字节校验，需先 start_tts.ps1）：32 项断言
+powershell -ExecutionPolicy Bypass -File tools\test-tts.ps1
+
+# 按计划时刻来航班（lead_minutes / 抖动确定性 / 同刻多架 / 时钟原点）：21 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_schedule.gd
+
+# ATIS 抄收状态分级（三档概率 / 通话文本 / 进程单标签 / 存档往返）：49 项断言
+....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_atis_report.gd
+
+# AI 驾驶舱（质疑分级/重申请/错误注入/种子）：34 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_pilot.gd
 
-# 许可三模式 / 离场情报 / 不完整质疑：44 项断言
+# 许可三模式 / 离场情报 / 不完整质疑：46 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_issue.gd
 
 # 移交清单 / 整理进程单 / 评分：47 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_score.gd
 
-# 复诵核对双模式/关键项/时限：34 项断言
+# 复诵核对双模式/关键项/时限/只指出错项不给值：50 项断言
 ....\Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://tests/test_readback.gd
 
 # 通播生命周期/阈值/过期闸门：52 项断言
@@ -652,8 +679,7 @@ powershell -ExecutionPolicy Bypass -File tools\test-listen.ps1
 
 ## 当前状态
 
-v0.1.18
-
+v0.1.24 · atis
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
 - **新游戏 / 训练** → 席位选择 → **加载页** → 会话界面，全程自动存档
@@ -672,7 +698,22 @@ v0.1.18
   落到逐项复诵判定；`tools/test-listen.ps1` 端到端 45 项断言（10–81 ms / 置信度 98.8–99.5%）
 - **真实语音模式可玩**（08 §4.2）：选项 → 许可发布模式 →「真实语音」，
   右栏「按下通话」按住说话、松开识别；麦克风采集 → 16 kHz WAV → 常驻识别助手 → 逐项判定/发放许可
-- `设置` 仍是占位页；席位面板是占位区（下一步）
+- **机组真的会说话**（v0.1.21）：以前只有管制发许可和机组复诵会念，**机组的放行申请从来没念出来过**。
+  现在播报改成**按通话记录驱动**（`_log()` 带片段列表，面板逐条追播），
+  申请 / 许可 / 复诵 / 移交全覆盖，同一句话只念一次
+- **来航班改成按计划时刻**（v0.1.21，07 §2.2）：原来「每 18 秒冒一架」改成
+  「计划起飞前 15 分钟开始呼叫」（`lead_minutes`，抖动 0–10 s 按航班号确定性生成），
+  跟真实放行席一样是**机组先申请**，不是系统凭空塞单子
+- **全局按钮/选项重排**（v0.1.22）：所有设置类界面统一到 `ui/ui_kit.gd` 的按钮规格
+  （主/次/暖/幽灵/危险五档 + 等高行 + 统一高度 38/32/26 × UI_SCALE），
+  放行席表单改成两列表格、去掉右侧空洞，设置窗口从长条下拉菜单改成「常规/对话/语音/关于」四类面板
+- **本地神经 TTS：IndexTTS2**（v0.1.23）：音色从云端 edge-tts 换成**纯本地** IndexTTS2，
+  8 维情绪向量可组合（「愤怒 70% + 平静 30%」），两套音色（管制/机组）× 49 片段离线批量生成；
+  实测本机念一句完整许可要 114–117 秒，所以**不做实时合成**，只做离线批量 + 运行时拼装
+- **ATIS 抄收状态按难度分级**（v0.1.24，07 §2.3 / §7）：机组报现行代号 / 没抄收 / 报过期代号
+  三档，概率按文档 100/0/0、80/20/0、60/20/20；报过期代号不算抄收有效，进程单打黄色标签
+- **只指出读错项、不给正确值**（v0.1.24，07 §九）：复诵卡「复诵有误」→ 机组追问正确值，状态不推进
+- 席位面板仍是占位区（下一步：地面席 / 塔台席）
 
 ---
 

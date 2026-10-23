@@ -41,6 +41,17 @@ static func next_alpha(a: String) -> String:
 	return String.chr(u.unicode_at(0) + 1)
 
 
+## 反向：上一版代号（A 之前回到 Z）。
+## 用在 07 §7 的"机组报了个过期代号"——它报的正是上一版，而不是随便一个字母。
+static func prev_alpha(a: String) -> String:
+	var u := a.strip_edges().to_upper()
+	if u.length() != 1 or u < "A" or u > "Z":
+		return "Z"
+	if u == "A":
+		return "Z"
+	return String.chr(u.unicode_at(0) - 1)
+
+
 static func state_text(s: int) -> String:
 	match s:
 		FRESH: return "有效"

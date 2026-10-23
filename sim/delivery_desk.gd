@@ -73,8 +73,36 @@ var field := {
 ## 是否启用"机组有没有报通播"这道检查。
 ## 默认关闭，让单元测试照旧；开局时由会话打开。
 var enable_atis_check := false
-## 启用后，每架航班漏报通播的概率
-const ATIS_MISSING_RATE := 0.25
+
+## 07 §2.3 / §7：机组在申请通话里报告 ATIS 的三种形态及其概率，按难度分级。
+##   current = 报现行代号 / missing = 根本没抄收 / stale = 报了个过期代号
+## 文档口径：简易 100% 现行；进阶 80% 现行 + 20% 未抄收；高阶 60 + 20 + 20。
+## 过期代号取"上一版"（Z 之前是 A 的前一版），因为它就是机组上次抄到的那份。
+const ATIS_REPORT_RATES := {
+	"easy": [1.0, 0.0, 0.0],
+	"normal": [0.80, 0.20, 0.0],
+	"hard": [0.60, 0.20, 0.20],
+}
+const ATIS_REPORT_CURRENT := 0
+const ATIS_REPORT_MISSING := 1
+const ATIS_REPORT_STALE := 2
+
+
+## 按当前难度掷出机组的 ATIS 抄收状态（只掷一次骰子，保证随机序列可复现）。
+func roll_atis_report() -> int:
+	var w: Array = ATIS_REPORT_RATES.get(difficulty, ATIS_REPORT_RATES["normal"])
+	var x := rng.randf()
+	if x < float(w[0]):
+		return ATIS_REPORT_CURRENT
+	if x < float(w[0]) + float(w[1]):
+		return ATIS_REPORT_MISSING
+	return ATIS_REPORT_STALE
+
+
+## 这一档难度下，机组报过期代号的可能性有多大（0 表示这档不会出现）。
+func atis_stale_chance() -> float:
+	var w: Array = ATIS_REPORT_RATES.get(difficulty, ATIS_REPORT_RATES["normal"])
+	return float(w[2])
 
 ## 是否要求"计划已核对"才能发放行许可。
 ## 真实放行席必须先核对飞行计划与进程单；默认关闭让单元测试照旧。
@@ -242,11 +270,16 @@ func spawn_request(sim_time: float, callsign: String = "") -> Flight:
 	var en := str(pe.get("endurance", ""))
 	f.plan_endurance = en if en != "" else str(_type_info(f.type).get("endurance", ""))
 
-	# 机组首次呼叫有没有报"已收到通播"——真实里这是要抓的
+	# 机组首次呼叫有没有报"已收到通播"——真实里这是要抓的。
+	# 07 §2.3：报的状态会影响这通电话的内容（现行代号 / 不提 / 报个过期代号）。
+	var alpha := str(field.get("atis_alpha", "A"))
 	if enable_atis_check:
-		f.atis_ok = rng.randf() >= ATIS_MISSING_RATE
+		f.atis_report = roll_atis_report()
 	else:
-		f.atis_ok = true
+		f.atis_report = ATIS_REPORT_CURRENT
+	f.atis_ok = f.atis_report == ATIS_REPORT_CURRENT
+	f.atis_reported = AtisBroadcast.prev_alpha(alpha) \
+		if f.atis_report == ATIS_REPORT_STALE else alpha
 
 	f.state = Flight.State.PENDING
 	f.request_time = sim_time
@@ -255,13 +288,15 @@ func spawn_request(sim_time: float, callsign: String = "") -> Flight:
 	_assign_slot(f, sim_time)
 	flights.append(f)
 
-	var alpha := str(field.get("atis_alpha", "A"))
-	# 机组第一次呼叫：这句话必须真的念出来（玩家最常抱怨"从来没听到申请"）
-	var say := Voice.request(f.callsign, f.stand, f.destination, f.atis_ok)
-	if f.atis_ok:
+	# 机组第一次呼叫：这句话必须真的念出来（玩家最常抱怨"从来没听到申请"）。
+	# 报的是过期代号时，通话里照样说"已收到通播 X"（它确实抄了，只是抄的是旧的），
+	# 管制员要自己听出代号不对 —— 这正是 07 §2.3 想要的抓手。
+	var has_atis := f.atis_report != ATIS_REPORT_MISSING
+	var say := Voice.request(f.callsign, f.stand, f.destination, has_atis)
+	if has_atis:
 		_log(sim_time, "pilot",
 			"放行，%s，停机位 %s，已收到通播 %s，申请放行至 %s。" % [
-				f.callsign, f.stand, alpha, f.destination], say)
+				f.callsign, f.stand, f.atis_reported, f.destination], say)
 	else:
 		_log(sim_time, "pilot",
 			"放行，%s，停机位 %s，申请放行至 %s。" % [f.callsign, f.stand, f.destination],
@@ -590,20 +625,25 @@ static func _grade(total: int) -> String:
 # ---------------------------------------------------------------- AI 驾驶舱（07 文档）
 
 ## 机组对许可做完整性检查（规范 §4.4）。返回质疑内容列表，空表示接受。
-## 只有"必质疑"的几类：编码被占用、高度不可用、离场程序不兼容、缺修正海压。
+##
+## 查几项按难度分级（07 §7「质疑触发」表）：
+##   简易 = QNH、编码重复（呼号在结构化模式里不可能写错）
+##   进阶 = 再加离场程序与计划航路不兼容
+##   高阶 = 全部（含高度不在协议高度带）
 func pilot_check(f: Flight, sid: String, alt_m: int, squawk: String) -> Array:
 	var out: Array = []
 	var owner := squawk_owner(squawk, f.callsign)
 	if owner != "":
 		out.append("应答机编码 %s 已被占用，请重新指定" % squawk)
-	var band := PlanReview.loa_band(review_ref, sid)
-	if not band.is_empty():
-		var lo := int(band.get("alt_min", 0))
-		var hi := int(band.get("alt_max", 0))
-		if alt_m < lo or alt_m > hi:
-			out.append("高度 %d 米不可用，请指定其他高度（%d–%d 米）"
-				% [alt_m, lo, hi])
-	if not SID_ROUTES.has(sid):
+	if difficulty == "hard":
+		var band := PlanReview.loa_band(review_ref, sid)
+		if not band.is_empty():
+			var lo := int(band.get("alt_min", 0))
+			var hi := int(band.get("alt_max", 0))
+			if alt_m < lo or alt_m > hi:
+				out.append("高度 %d 米不可用，请指定其他高度（%d–%d 米）"
+					% [alt_m, lo, hi])
+	if difficulty != "easy" and not SID_ROUTES.has(sid):
 		out.append("不能执行该离场程序，请确认离场程序与计划航路")
 	if int(field.get("qnh", 0)) <= 0:
 		out.append("缺少高度表拨正值，请提供 QNH")
@@ -965,6 +1005,8 @@ func notify_latest_atis(callsign: String, sim_time: float) -> Dictionary:
 		return {"ok": false, "error": "找不到航班 %s" % callsign}
 	f.atis_notified = true
 	f.atis_reported = atis.alpha
+	f.atis_report = ATIS_REPORT_CURRENT
+	f.atis_ok = true
 	_log(sim_time, "atc", "%s，最新通播是 %s，请抄收后再申请放行。"
 		% [f.callsign, atis.alpha])
 	return {"ok": true, "error": ""}
@@ -977,6 +1019,8 @@ func report_atis_changes(callsign: String, sim_time: float) -> Dictionary:
 		return {"ok": false, "error": "找不到航班 %s" % callsign}
 	f.atis_notified = true
 	f.atis_reported = atis.alpha
+	f.atis_report = ATIS_REPORT_CURRENT
+	f.atis_ok = true
 	var parts := PackedStringArray()
 	parts.append("使用跑道 %s" % atis.runway)
 	if atis.wind != "":
@@ -1775,7 +1819,7 @@ func full_clearance_text(f: Flight) -> String:
 	return clearance_text(f) + " " + info + "。"
 
 
-## 机组报告漏了通播时，管制要求先收听。
+## 机组报告漏了通播（或报了个过期代号）时，管制要求先收听现行通播。
 func require_atis(callsign: String, sim_time: float) -> Dictionary:
 	var f := get_flight(callsign)
 	if f == null:
@@ -1783,7 +1827,9 @@ func require_atis(callsign: String, sim_time: float) -> Dictionary:
 	if f.atis_ok:
 		return {"ok": false, "error": "%s 已经报告收到通播" % callsign}
 	f.atis_ok = true
-	var alpha := str(field.get("atis_alpha", "A"))
+	f.atis_report = ATIS_REPORT_CURRENT
+	f.atis_reported = atis.alpha
+	var alpha := atis.alpha
 	_log(sim_time, "atc", "%s，请先收听通播 %s 后再申请放行。" % [f.callsign, alpha])
 	_log(sim_time, "pilot", "%s，收到，通播 %s 已抄收。" % [f.callsign, alpha])
 	return {"ok": true, "error": ""}
@@ -2125,6 +2171,46 @@ func accept_readback(callsign: String, sim_time: float) -> Dictionary:
 	_log(sim_time, "atc", "%s，复诵正确，放行完成，联系地面。" % f.callsign,
 		Voice.simple(f.callsign, "p_readback_ok"))
 	return {"ok": true, "error": "", "correct": true}
+
+
+## 07 §九：「玩家指出复诵错误但未给出正确值 → AI 追问『请给出正确[项目]』，状态保持 READBACK_SENT」。
+## keys 是玩家指出的读错项（可为空）。不管给没给项，状态都不推进 —— 纠错只能靠重发完整许可
+## （规范 §6.2：纠错一律重发完整许可，不能只改一项）。
+func flag_readback_wrong(callsign: String, keys: Array, sim_time: float) -> Dictionary:
+	var f := get_flight(callsign)
+	if f == null:
+		return {"ok": false, "error": "找不到航班 %s" % callsign}
+	if f.state != Flight.State.READBACK:
+		return {"ok": false, "error": "%s 当前没有待复核的复诵" % callsign}
+
+	var names := PackedStringArray()
+	# 优先用复诵比对表里的中文名（它有跑道/航路/风这些标签），
+	# 语音变体标签（alt/squawk/...）只作为兜底。
+	var labels := {}
+	for it in f.readback_items:
+		var d: Dictionary = it
+		labels[String(d.get("key", ""))] = String(d.get("label", ""))
+	for k in keys:
+		var key := String(k)
+		if key == "":
+			continue
+		var nm := String(labels.get(key, ""))
+		names.append(nm if nm != "" else _voice_item_label(key))
+	if names.is_empty():
+		# 只说"读错了"没说是哪项：机组会反问哪一项
+		_log(sim_time, "atc", "%s，复诵有误，请重新抄收。" % f.callsign)
+		_log(sim_time, "pilot", "%s，请指出是哪一项读错了。" % f.callsign,
+			Voice.simple(f.callsign, "p_say_again"))
+		f.readback_asks += 1
+		return {"ok": true, "error": "", "need": [], "asked": "请指出读错项"}
+
+	# 指了项但没给正确值：机组追问正确值，复诵仍挂在这里
+	var joined := "、".join(names)
+	_log(sim_time, "atc", "%s，复诵有误，%s 读错了。" % [f.callsign, joined])
+	_log(sim_time, "pilot", "%s，请给出正确的%s。" % [f.callsign, joined],
+		Voice.simple(f.callsign, "p_say_again"))
+	f.readback_asks += 1
+	return {"ok": true, "error": "", "need": names, "asked": joined}
 
 
 ## 退回重发：复诵有问题时应当这么做。

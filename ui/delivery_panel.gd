@@ -87,6 +87,8 @@ var _dep_grid: GridContainer
 var _dep_taxi_btn: Button
 var _accept_btn: Button
 var _reissue_btn: Button
+## 「复诵有误」：只指出读错了哪一项，不给正确值（07 §九，机组会追问正确值）
+var _flag_btn: Button
 var _log_box: VBoxContainer
 var _log_scroll: ScrollContainer
 var _airport: Dictionary = {}
@@ -694,6 +696,10 @@ func _build_editor(parent: HBoxContainer) -> void:
 	_accept_btn = _action_button("复诵正确", AtcTheme.C_ACCENT)
 	_accept_btn.pressed.connect(_on_accept)
 	rb_actions.add_child(_accept_btn)
+	# 07 §九：只指出"读错了"、不给正确值时，机组会追问正确值（状态不推进）
+	_flag_btn = _action_button("复诵有误", AtcTheme.C_TEXT_DIM)
+	_flag_btn.pressed.connect(_on_flag_readback)
+	rb_actions.add_child(_flag_btn)
 	_reissue_btn = _action_button("重发许可", AtcTheme.C_WARM)
 	_reissue_btn.pressed.connect(_on_reissue)
 	rb_actions.add_child(_reissue_btn)
@@ -1177,6 +1183,15 @@ func _flight_card(f: Flight) -> Control:
 	col.add_child(_label("%d m · SQK %s" % [f.initial_alt_m, f.squawk],
 		11, 400, AtcTheme.C_TEXT_FAINT))
 
+	# 07 §十：ATIS 抄收状态是进程单上的独立标签。
+	# 报的是过期代号 → 黄色（文档点名要黄，玩家得自己听出代号不对）；
+	# 根本没抄收 → 红色（必须先要求机组收听才能发放行）。
+	if f.atis_report == 2:
+		col.add_child(_label("通播 %s（过期）" % f.atis_reported,
+			10, 700, AtcTheme.C_WARM))
+	elif f.atis_report == 1:
+		col.add_child(_label("未报通播", 10, 700, AtcTheme.C_DANGER))
+
 	var stamps := _stamp_text(f)
 	if stamps != "":
 		col.add_child(_label(stamps, 10, 400, AtcTheme.C_TEXT_FAINT))
@@ -1394,11 +1409,20 @@ func _refresh_detail() -> void:
 			_readback_diff.text = "不一致：" + f.readback_diff
 			_readback_diff.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 
-	# 机组首次呼叫没报通播：先要求收听，再发放行
+	# 机组首次呼叫没报通播（或报了个过期代号）：先要求收听，再发放行
 	_atis_card.visible = (not f.atis_ok) and f.state == Flight.State.PENDING
 	if _atis_card.visible:
-		_atis_text.text = "机组未报告收到通播 %s。按规则应先要求机组收听，再发放行许可。" % \
-			str(desk.field.get("atis_alpha", "A"))
+		if f.atis_report == 2:
+			# 07 §2.3：过期代号不是"没抄收"，是抄了旧的那份 —— 文案要说清区别
+			_atis_text.text = "机组报的是通播 %s，已是上一版（现行 %s）。应先要求机组抄收现行通播，再发放行许可。" % [
+				f.atis_reported, desk.atis.alpha]
+			_atis_text.add_theme_color_override("font_color", AtcTheme.C_WARM)
+			_atis_btn.text = "通知机组抄收通播 %s" % desk.atis.alpha
+		else:
+			_atis_text.text = "机组未报告收到通播 %s。按规则应先要求机组收听，再发放行许可。" % \
+				desk.atis.alpha
+			_atis_text.add_theme_color_override("font_color", AtcTheme.C_TEXT)
+			_atis_btn.text = "要求机组收听通播"
 
 	_update_preview()
 	_refresh_handoff(f)
@@ -1966,6 +1990,37 @@ func _on_reissue() -> void:
 		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
 		return
 	refresh()
+
+
+## 07 §九：只说"读错了"、不给正确值 → 机组追问正确值，复诵仍挂着。
+## 指出哪几项是从当前复诵比对表（简易）或玩家逐项判定（高阶）里读的。
+func _on_flag_readback() -> void:
+	if desk == null or _selected == "":
+		return
+	var f := desk.get_flight(_selected)
+	if f == null:
+		return
+	var keys: Array = []
+	if desk.readback_hard:
+		for k in f.readback_marks.keys():
+			if not bool(f.readback_marks[k]):
+				keys.append(k)
+	else:
+		for it in f.readback_items:
+			var d: Dictionary = it
+			if not bool(d.get("same", true)):
+				keys.append(String(d.get("key", "")))
+	var r := desk.flag_readback_wrong(_selected, keys, now)
+	if not r.ok:
+		refresh()
+		_hint.text = String(r.error)
+		_hint.add_theme_color_override("font_color", AtcTheme.C_DANGER)
+		return
+	refresh()
+	var asked := String(r.get("asked", ""))
+	_hint.text = "机组追问：请给出正确的%s" % asked if asked != "" else \
+		"机组追问：请指出哪一项读错了"
+	_hint.add_theme_color_override("font_color", AtcTheme.C_WARM)
 
 
 func _on_require_atis() -> void:

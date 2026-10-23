@@ -18,6 +18,7 @@ func _initialize() -> void:
 	_test_items()
 	_test_easy()
 	_test_hard()
+	_test_flag_wrong()
 	_test_deadline()
 	_test_serialize()
 	print("")
@@ -152,6 +153,65 @@ func _test_hard() -> void:
 	var d4 := _to_readback(false, false)
 	var r4 := d4.mark_readback_item("RBK001", "sid", true, 101.0)
 	_check(not bool(r4.ok), "简易模式不需要逐项标记", String(r4.error))
+
+
+## 07 §九：玩家指出复诵错误但未给出正确值 → 机组追问正确值，状态保持 READBACK_SENT。
+func _test_flag_wrong() -> void:
+	_section("只指出读错项、不给正确值（07 §九）")
+	var d := _to_readback(false, true)
+	var f := d.get_flight("RBK001")
+	var wrong_keys: Array = []
+	for it in f.readback_items:
+		var x: Dictionary = it
+		if not bool(x.same):
+			wrong_keys.append(String(x.key))
+	_check(wrong_keys.size() > 0, "复诵确实读错了至少一项", str(wrong_keys))
+
+	var before := f.readback_asks
+	var r := d.flag_readback_wrong("RBK001", wrong_keys, 100.0)
+	_check(bool(r.ok), "允许指出读错项", String(r.error))
+	_check(f.state == Flight.State.READBACK, "状态保持复诵待确认",
+		str(f.state))
+	_check(f.readback_asks == before + 1, "追问计数 +1", str(f.readback_asks))
+	var need: Array = r.get("need", [])
+	_check(need.size() == wrong_keys.size(), "追问里点名了读错的项",
+		str(need))
+	var asked := String(r.get("asked", ""))
+	_check(asked != "", "给出了项目名", asked)
+	# 通话记录里机组确实追问了"正确值"
+	var pilot_line := ""
+	for row in d.transcript:
+		var t := String((row as Dictionary).get("text", ""))
+		if t.contains("请给出正确的"):
+			pilot_line = t
+	_check(pilot_line != "", "通话记录里有『请给出正确的…』", pilot_line)
+	_check(pilot_line.contains(asked), "追问的项目与点名一致", pilot_line)
+
+	# 什么都没指就点"复诵有误"：机组反问哪一项
+	var d2 := _to_readback(false, true)
+	var r2 := d2.flag_readback_wrong("RBK001", [], 100.0)
+	_check(bool(r2.ok), "空项也允许", String(r2.error))
+	_check((r2.get("need", []) as Array).is_empty(), "没有点名项")
+	_check(String(r2.get("asked", "")) == "请指出读错项", "机组反问哪一项",
+		String(r2.get("asked", "")))
+	_check(d2.get_flight("RBK001").state == Flight.State.READBACK, "状态不动")
+
+	# 不在复诵状态就拒绝
+	var d3 := _desk(false)
+	var r3 := d3.flag_readback_wrong("RBK001", ["squawk"], 100.0)
+	_check(not bool(r3.ok), "还没复诵时不能指出错误", String(r3.error))
+
+	# 追问之后仍然必须真的重发（纠错只能发完整许可）
+	var d4 := _to_readback(false, true)
+	var f4 := d4.get_flight("RBK001")
+	d4.flag_readback_wrong("RBK001", wrong_keys, 100.0)
+	var acc := d4.accept_readback("RBK001", 101.0)
+	_check(not bool(acc.ok), "追问不等于修正，仍不能确认", String(acc.error))
+	_check(f4.state == Flight.State.READBACK, "状态还是复诵待确认")
+	# 存档往返
+	var back := Flight.from_dict(f4.to_dict())
+	_check(back.readback_asks == f4.readback_asks, "追问计数进存档",
+		str(back.readback_asks))
 
 
 func _test_deadline() -> void:
