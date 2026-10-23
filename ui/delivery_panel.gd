@@ -1705,11 +1705,17 @@ func _play_pending_voices() -> void:
 		return
 	if _spoken_upto >= desk.transcript.size():
 		return
+	var before := _spoken_upto
 	while _spoken_upto < desk.transcript.size():
 		var row: Dictionary = desk.transcript[_spoken_upto]
 		_spoken_upto += 1
 		if row.has("voice"):
 			_tts_queue.append(row)
+	# 玩家抱怨"从来没听到机组申请"时，这行日志就是判据：
+	# 有没有入队、是哪一句、取到几个片段。不打日志只能靠猜。
+	if _spoken_upto > before:
+		AtcLog.info("语音：新入队 %d 句（累计 %d 句，待播 %d 句）" % [
+			_spoken_upto - before, _spoken_upto, _tts_queue.size()])
 	if not _tts_queue.is_empty() and not _tts_busy:
 		_drain_voice_queue()
 
@@ -1725,7 +1731,10 @@ func _drain_voice_queue() -> void:
 		if not played:
 			var vp := _ensure_player()
 			vp.enabled = true
-			vp.enqueue(row["voice"], role)
+			var ids: Array = row["voice"]
+			AtcLog.info("语音：片段播报 %s（%s，%d 段）" % [
+				String(row.get("text", "")) .substr(0, 24), role, ids.size()])
+			vp.enqueue(ids, role)
 			# 片段库是同步排队的，等它播完再处理下一句，避免两条叠在一起
 			await vp.finished
 	_tts_busy = false
