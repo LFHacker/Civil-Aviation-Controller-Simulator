@@ -4,9 +4,9 @@ extends RefCounted
 
 const MAJOR := 0
 const MINOR := 1
-const PATCH := 26
+const PATCH := 27
 
-const CODENAME := "audible"
+const CODENAME := "rotation"
 
 
 ## 形如 "0.0.1"

@@ -71,6 +71,15 @@ const DEST_TEXT := {
 
 const AIRLINES := ["CCA", "CES", "CSN", "CHH", "CQH"]
 
+## 机型读法（07 §4.1 的申请通话槽位里要报机型："波音737" 这种）
+const TYPE_TEXT := {
+	"B738": "波音七三八",
+	"A320": "空客三二零",
+	"A321": "空客三二幺",
+	"B789": "波音七八九",
+}
+const TYPE_PREFIX := "t_"
+
 ## 公司呼号的中文读法（生成音频片段时用；中国管制通话里读中文名，不读字母）
 const AIRLINE_TEXT := {
 	"CCA": "国航",
@@ -150,12 +159,15 @@ static func readback(callsign_code: String, sid_id: String, dest_id: String,
 
 
 ## 首次呼叫（机组 -> 放行）
+## 07 §4.1 的槽位顺序：呼号 / 停机位 / 机型 / ATIS 抄收状态 / 申请放行至目的地。
+## type_code 为空时（老存档或计划里没写机型）跳过机型那一段，不硬凑。
 static func request(callsign_code: String, stand: String, dest_id: String,
-		atis_ok: bool) -> Array:
+		atis_ok: bool, type_code: String = "") -> Array:
 	var out: Array = []
 	out.append_array(callsign(callsign_code))
 	out.append(PHRASE_PREFIX + "stand")
 	out.append_array(digits(stand))
+	out.append_array(type_phrase(type_code))
 	if atis_ok:
 		out.append(PHRASE_PREFIX + "atis_received")
 	else:
@@ -163,6 +175,20 @@ static func request(callsign_code: String, stand: String, dest_id: String,
 	out.append(PHRASE_PREFIX + "request")
 	out.append_array(dest(dest_id))
 	return out
+
+
+## 机型的片段序列：认得的机型给一条整句片段，不认得的返回空（宁可不念）
+static func type_phrase(type_code: String) -> Array:
+	var key := type_code.strip_edges().to_upper()
+	if key == "" or not TYPE_TEXT.has(key):
+		return []
+	return [TYPE_PREFIX + key]
+
+
+## 机型的中文读法（通话文本用）；不认得就原样返回代码
+static func type_text_of(type_code: String) -> String:
+	var key := type_code.strip_edges().to_upper()
+	return str(TYPE_TEXT.get(key, key))
 
 
 ## 移交地面
@@ -213,4 +239,4 @@ static func dest(dest_id: String) -> Array:
 ## 片段总数（生成音频前用来核对清单）
 static func piece_count() -> int:
 	return DIGITS.size() + FIXED_PHRASES.size() + AIRLINES.size() \
-		+ SID_TEXT.size() + DEST_TEXT.size()
+		+ SID_TEXT.size() + DEST_TEXT.size() + TYPE_TEXT.size()

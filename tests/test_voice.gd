@@ -17,6 +17,7 @@ func _initialize() -> void:
 	print("════════ 语音片段测试 ════════")
 	_test_digits()
 	_test_callsign()
+	_test_request_type()
 	_test_clearance()
 	_test_readback()
 	_test_other_lines()
@@ -52,6 +53,31 @@ func _test_callsign() -> void:
 	_check(c2[0] == "ap_CES", "CES 前缀能识别", str(c2))
 	var c3 := Voice.callsign("3001")
 	_check(c3 == ["d3", "d0", "d0", "d1"], "没有公司前缀时只读数字", str(c3))
+
+
+## 07 §4.1：申请通话的槽位顺序是 呼号 / 机位 / 机型 / ATIS / 申请放行至目的地
+func _test_request_type() -> void:
+	_section("申请通话里的机型槽位（07 §4.1）")
+	var r := Voice.request("CCA1501", "215", "ZSPD", true, "B738")
+	_check(r.has("t_B738"), "带机型片段", str(r))
+	var i_type := r.find("t_B738")
+	var i_atis := r.find("p_atis_received")
+	_check(i_type == 9, "机型排在停机位数字之后（0-4 呼号 / 5 停机位 / 6-8 机位数字）",
+		str(i_type))
+	_check(i_type < i_atis, "机型在 ATIS 抄收状态之前", "%d < %d" % [i_type, i_atis])
+	_check(r[-1] == "dest_ZSPD", "最后是目的地", str(r[-1]))
+	# 机型不详/为空时不硬凑
+	_check(not Voice.request("CCA1501", "215", "ZSPD", true).has("t_"),
+		"没给机型就不插这一段")
+	_check(Voice.type_phrase("").is_empty(), "空机型返回空")
+	_check(Voice.type_phrase("XX99").is_empty(), "不认识机型返回空（宁可不念）")
+	_check(Voice.type_phrase("b738") == ["t_B738"], "小写也认")
+	_check(Voice.type_text_of("A320") == "空客三二零", Voice.type_text_of("A320"))
+	_check(Voice.type_text_of("ZZ00") == "ZZ00", "不认得时原样返回代码")
+	# ATIS 未抄收时照样有机型
+	var r2 := Voice.request("CCA1501", "215", "ZSPD", false, "A321")
+	_check(r2.has("t_A321") and r2.has("p_not_received"),
+		"未抄收通播时也报机型", str(r2))
 
 
 func _test_clearance() -> void:
@@ -122,7 +148,7 @@ func _test_manifest() -> void:
 	var used: Array = []
 	used.append_array(Voice.clearance("CCA1501", "RUMUK8D", "ZSPD", 6000, "4215", 1013))
 	used.append_array(Voice.readback("CES5175", "SASAN5B", "ZSPD", 6900, "4215", 1013))
-	used.append_array(Voice.request("CSN3001", "215", "ZSPD", true))
+	used.append_array(Voice.request("CSN3001", "215", "ZSPD", true, "B738"))
 	used.append_array(Voice.handoff("CHH7801", "121.7"))
 	var unknown: Array = []
 	for id in used:
@@ -132,6 +158,9 @@ func _test_manifest() -> void:
 				unknown.append(s)
 		elif s.begins_with(Voice.AIRLINE_PREFIX):
 			if not Voice.AIRLINES.has(s.substr(Voice.AIRLINE_PREFIX.length())):
+				unknown.append(s)
+		elif s.begins_with(Voice.TYPE_PREFIX):
+			if not Voice.TYPE_TEXT.has(s.substr(Voice.TYPE_PREFIX.length())):
 				unknown.append(s)
 		elif s.begins_with("sid_"):
 			if not Voice.SID_TEXT.has(s.substr(4)):
@@ -147,8 +176,8 @@ func _test_manifest() -> void:
 			unknown.append(s)
 	_check(unknown.is_empty(), "所有播放片段都有对应音频条目", str(unknown))
 	_check(Voice.piece_count() == 10 + Voice.FIXED_PHRASES.size() + Voice.AIRLINES.size()
-		+ Voice.SID_TEXT.size() + Voice.DEST_TEXT.size(),
-		"片段总数 = 数字 + 短语 + 公司 + 程序 + 机场", str(Voice.piece_count()))
+		+ Voice.SID_TEXT.size() + Voice.DEST_TEXT.size() + Voice.TYPE_TEXT.size(),
+		"片段总数 = 数字 + 短语 + 公司 + 程序 + 机场 + 机型", str(Voice.piece_count()))
 	_check(Voice.piece_count() < 90, "片段库足够小，可以一次性生成随包分发",
 		str(Voice.piece_count()))
 	var named := 0

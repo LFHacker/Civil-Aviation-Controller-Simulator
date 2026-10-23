@@ -60,14 +60,16 @@ def read_voice_gd():
     airlines = re.findall(r'"([^"]*)"', block("const AIRLINES :="))
     names = dict(re.findall(r'"([A-Z]{3})"\s*:\s*"([^"]*)"',
                             block("const AIRLINE_TEXT :=")))
+    types = dict(re.findall(r'"([A-Z0-9]+)"\s*:\s*"([^"]*)"',
+                            block("const TYPE_TEXT :=")))
     sids = dict(re.findall(r'"([A-Za-z0-9_]+)"\s*:\s*"([^"]*)"',
                            block("const SID_TEXT :=")))
     dests = dict(re.findall(r'"([A-Za-z0-9_]+)"\s*:\s*"([^"]*)"',
                             block("const DEST_TEXT :=")))
-    return digits, phrases, airlines, names, sids, dests
+    return digits, phrases, airlines, names, types, sids, dests
 
 
-def pieces(digits, phrases, airlines, names, sids, dests):
+def pieces(digits, phrases, airlines, names, types, sids, dests):
     out = []
     for i, d in enumerate(digits):
         out.append(("d%d" % i, d))
@@ -75,6 +77,8 @@ def pieces(digits, phrases, airlines, names, sids, dests):
         out.append((pid, phrases[pid]))
     for a in airlines:
         out.append(("ap_" + a, names.get(a, a)))
+    for t in sorted(types.keys()):
+        out.append(("t_" + t, types[t]))
     for sid in sorted(sids.keys()):
         out.append(("sid_" + sid, sids[sid]))
     for ap in sorted(dests.keys()):
@@ -123,6 +127,8 @@ def main():
     ap.add_argument("--no-radio", action="store_true")
     ap.add_argument("--only", default="", help="只做指定 id（逗号分隔，调试用）")
     ap.add_argument("--resume", action="store_true", help="已存在的片段跳过")
+    ap.add_argument("--manifest-only", action="store_true",
+                    help="不合成，只按磁盘上已有的 .ogg 重建 manifest（修清单用）")
     args = ap.parse_args()
 
     out = args.out or os.path.join(PROJECT, "assets", "audio", "phrases", args.role)
@@ -136,19 +142,43 @@ def main():
             if k:
                 base_emotion[k.strip()] = float(v or 1.0)
 
-    digits, phrases, airlines, names, sids, dests = read_voice_gd()
-    items = pieces(digits, phrases, airlines, names, sids, dests)
+    digits, phrases, airlines, names, types, sids, dests = read_voice_gd()
+    items = pieces(digits, phrases, airlines, names, types, sids, dests)
     if args.only:
         keep = set(args.only.split(","))
         items = [it for it in items if it[0] in keep]
 
+    # 清单**总是**先读出来再合并，不能只在 --resume 时读：
+    # 否则 `--only t_B738` 这种补生成会把整份清单覆盖成只有 1–4 条
+    # （真的发生过：补了 4 条机型片段，53 条的清单被写成 4 条）。
     manifest = {}
     mpath = os.path.join(out, "manifest.json")
-    if args.resume and os.path.exists(mpath):
+    if os.path.exists(mpath):
         try:
             manifest = json.load(io.open(mpath, "r", encoding="utf-8"))
         except Exception:
             manifest = {}
+    manifest.pop("_meta", None)
+
+    # 只修清单：按片段表 + 磁盘上已有的 .ogg 重建，不合成、不联网
+    if args.manifest_only:
+        fixed = 0
+        for pid, text in items:
+            ogg = os.path.join(out, pid + ".ogg")
+            if not os.path.exists(ogg) or os.path.getsize(ogg) < 512:
+                continue
+            manifest[pid] = {"file": pid + ".ogg", "text": text,
+                             "sec": round(probe_seconds(ogg), 3),
+                             "bytes": os.path.getsize(ogg),
+                             "emotion": dict(PHRASE_EMOTION.get(pid, base_emotion))}
+            fixed += 1
+        manifest["_meta"] = {"engine": "indextts2", "role": args.role,
+                             "emotion": base_emotion, "count": len(manifest),
+                             "radio_filter": not args.no_radio}
+        with open(mpath, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        print("清单重建：%d 条 → %s" % (fixed, mpath))
+        return 0
 
     total = len(items)
     t_all = time.time()

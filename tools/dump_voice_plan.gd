@@ -12,7 +12,7 @@ func _initialize() -> void:
 	var lines := {
 		"pilot_readback": Voice.readback("CES5175", "SASAN5B", "ZSPD", 6900, "4215", 1013),
 		"controller_clearance": Voice.clearance("CES5175", "SASAN5B", "ZSPD", 6900, "4215", 1013),
-		"pilot_request": Voice.request("CCA1501", "215", "ZSPD", true),
+		"pilot_request": Voice.request("CCA1501", "215", "ZSPD", true, "B738"),
 		"handoff": Voice.handoff("CCA1501", "121.7"),
 	}
 	print("VOICE_PLAN_JSON:" + JSON.stringify(lines))

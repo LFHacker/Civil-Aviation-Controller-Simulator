@@ -690,7 +690,7 @@ powershell -ExecutionPolicy Bypass -File tools\test-tts.ps1
 
 ## 当前状态
 
-v0.1.25 · expire
+v0.1.27 · rotation
 - 主菜单、3D 塔台窗景（程序化几何体）
 - **放行席可玩**：进程单 → 发放行许可 → 复诵复核 → 放行完成，含误诵拦截
 - **新游戏 / 训练** → 席位选择 → **加载页** → 会话界面，全程自动存档

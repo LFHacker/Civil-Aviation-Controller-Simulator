@@ -320,18 +320,20 @@ func spawn_request(sim_time: float, callsign: String = "") -> Flight:
 	flights.append(f)
 
 	# 机组第一次呼叫：这句话必须真的念出来（玩家最常抱怨"从来没听到申请"）。
+	# 07 §4.1 的槽位顺序：呼号 / 停机位 / 机型 / ATIS 抄收状态 / 申请放行至目的地。
 	# 报的是过期代号时，通话里照样说"已收到通播 X"（它确实抄了，只是抄的是旧的），
 	# 管制员要自己听出代号不对 —— 这正是 07 §2.3 想要的抓手。
 	var has_atis := f.atis_report != ATIS_REPORT_MISSING
-	var say := Voice.request(f.callsign, f.stand, f.destination, has_atis)
+	var type_cn := Voice.type_text_of(f.type)
+	var say := Voice.request(f.callsign, f.stand, f.destination, has_atis, f.type)
 	if has_atis:
 		_log(sim_time, "pilot",
-			"放行，%s，停机位 %s，已收到通播 %s，申请放行至 %s。" % [
-				f.callsign, f.stand, f.atis_reported, f.destination], say)
+			"放行，%s，停机位 %s，%s，已收到通播 %s，申请放行至 %s。" % [
+				f.callsign, f.stand, type_cn, f.atis_reported, f.destination], say)
 	else:
 		_log(sim_time, "pilot",
-			"放行，%s，停机位 %s，申请放行至 %s。" % [f.callsign, f.stand, f.destination],
-			say)
+			"放行，%s，停机位 %s，%s，申请放行至 %s。" % [
+				f.callsign, f.stand, type_cn, f.destination], say)
 	return f
 
 
