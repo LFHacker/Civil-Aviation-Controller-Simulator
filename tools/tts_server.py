@@ -81,12 +81,50 @@ def silence_wav(seconds: float = 0.35, rate: int = 22050) -> bytes:
     return wav_bytes(bytes(frames), rate)
 
 
+def _patch_torchaudio_save():
+    """torchaudio 2.9+ 把 save() 挪到了 TorchCodec，没装 torchcodec 就整个报错：
+
+        TorchCodec is required for save_with_torchcodec.
+
+    IndexTTS2 生成完一定要落一个 wav 文件，所以这里换成一个只用标准库的写法。
+    只在"没装 torchcodec"时才打补丁，装了就让官方路径走。
+    """
+    try:
+        import torchcodec  # noqa: F401
+        return False
+    except Exception:
+        pass
+    import wave
+
+    import numpy as np
+    import torchaudio
+
+    def save(path, src, sample_rate, *args, **kwargs):
+        x = src
+        if isinstance(x, (tuple, list)):
+            x = x[0]
+        if hasattr(x, "detach"):
+            x = x.detach().cpu().float()
+        x = np.asarray(x)
+        if x.ndim > 1:
+            x = x.reshape(-1)
+        pcm = (np.clip(x, -1.0, 1.0) * 32767.0).astype("<i2")
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(int(sample_rate))
+            w.writeframes(pcm.tobytes())
+
+    torchaudio.save = save
+    return True
+
+
 class IndexTts2Backend:
     """真模型后端。第一次请求时才加载，避免服务启动就吃掉显存。"""
 
     name = "indextts2"
 
-    def __init__(self, model_dir, device="auto", fp16=True):
+    def __init__(self, model_dir, device="auto", fp16=False):
         self.model_dir = model_dir
         self.device = device
         self.fp16 = fp16
@@ -102,6 +140,10 @@ class IndexTts2Backend:
         with self._lock:
             if self._tts is not None:
                 return self._tts
+            patched = _patch_torchaudio_save()
+            if patched:
+                print("torchaudio.save 已替换为标准库写法（未安装 torchcodec）",
+                      flush=True)
             from indextts.infer_v2 import IndexTTS2
             cfg = os.path.join(self.model_dir, "config.yaml")
             use_cuda = self.device != "cpu"
@@ -113,7 +155,8 @@ class IndexTts2Backend:
                     use_cuda = False
             self._tts = IndexTTS2(cfg_path=cfg, model_dir=self.model_dir,
                                   use_fp16=bool(self.fp16 and use_cuda),
-                                  use_cuda_kernel=use_cuda,
+                                  # CUDA 加速核要额外编 triton kernel，先用纯 PyTorch 路径稳
+                                  use_cuda_kernel=False,
                                   use_deepspeed=False)
             return self._tts
 

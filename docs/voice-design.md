@@ -178,11 +178,58 @@ volume=2.4, alimiter=limit=0.9
 §6.2「模式游戏进行中不可切换」也按文档实现了：设置里改模式只记下偏好并提示
 「下一局生效」，本局的放行席不受影响。
 
-### 2.8 待办
+### 2.9 IndexTTS2：本地神经 TTS（2026-10-23 实测）
 
+按需求换了后端：**IndexTTS2**，情绪可控、纯本地、不依赖云端 API。
+它是 PyTorch 模型，Godot 里跑不了，所以做成**本地 HTTP 服务**：
+`tools/tts_server.py` 提供 `/health` 与 `/tts`，游戏侧 `sim/voice_tts.gd` 用
+`HTTPRequest` 要 WAV 字节，`AudioStreamWAV.load_from_buffer` 播出来。
+
+**情绪**：官方 8 维向量顺序是
+`[happy, angry, sad, afraid, disgusted, melancholic, surprised, calm]`，
+所以「愤怒 70% + 平静 30%」能直接给；`emo_alpha` 再调整体强度。
+游戏按通话类型给默认值：申请/复诵/许可以平静为主，没听清加一点意外，质疑加一点点不满。
+
+**本机实测（RTX 4060 Laptop 8GB / torch 2.11.0+cu128 / indextts 2.0.0）**
+
+| 项目 | 结果 |
+|---|---|
+| 模型体积 | 7.42 GB（`gpt.pth` 3.3G + `s2mel.pth` 1.1G + qwen emo 1.1G） |
+| 下载 | ModelScope 直连，3.9 分钟 |
+| 冷启动（含加载模型） | 约 40 秒 |
+| 短句「许可放行至首都。」 | 首句约 40 秒（冷），后续仍需数十秒 |
+| 一整条放行许可 | **114–117 秒**（热） |
+
+**结论：实时合成不适合这个游戏。** 一句许可要两分钟，玩家没法等。
+所以最终形态是**离线批量生成**：
+
+- 用 IndexTTS2 生成片段库（与原 `gen_voice.py` 同一套片段 id 与清单格式），
+  把音色换成神经 TTS、并按片段给情绪（例如「没听清」带意外）；
+- 游戏运行时仍然播预生成片段：零延迟、不占显存、不做模型加载；
+- `tts_enabled` 开关保留：调试/演示想听实时合成时可以打开，
+  连不上或太慢会自动退回片段库。
+
+**踩过的坑（全部固化进 `tools/setup_indextts2.ps1`）**
+
+1. **Python 必须 3.11**：`indextts` 的元数据写死 `>=3.10,<3.12`，3.12 会被 pip 直接拒绝。
+2. **download.pytorch.org 会卡死**：进程有 CPU、临时目录 0 字节。改从上海交大镜像
+   `mirror.sjtu.edu.cn/pytorch-wheels/cu128/` 直下（实测 2 MB/s；阿里云只有 170 KB/s）。
+3. **装 indextts 会把 CPU 版 torch 2.8.0 再装一遍**，覆盖掉 CUDA 轮子，并留下两个
+   `dist-info` 让 transformers 报 `Invalid version: None`。装完必须清掉旧 `dist-info`
+   再 `pip install --ignore-installed --no-deps` 强装 cu128 轮子。
+4. **torchaudio 2.9+ 的 `save()` 依赖 TorchCodec**（没装就整个合成失败：
+   `TorchCodec is required for save_with_torchcodec`）。服务端在没检测到 `torchcodec`
+   时把 `torchaudio.save` 换成标准库 `wave` 写法。
+5. **BigVGAN 声码器在 ModelScope 上不存在**（404），它会回落 HuggingFace。
+   服务端设 `HF_ENDPOINT=https://hf-mirror.com` 才能下到。
+6. `use_cuda_kernel` 需要额外编 triton kernel，首次先关掉走纯 PyTorch 路径。
+
+### 2.10 待办
+
+- [ ] 用 IndexTTS2 离线重生成片段库（含情绪），替换 edge-tts 版本
 - [ ] 音色定版后再决定要不要把片段库随包分发（许可证问题）
-- [ ] 多机组音色区分（现在管制一套、机组一套；同一套内靠 `pitch_scale` 区分，尚未启用）
-- [ ] 语音只覆盖「许可 / 复诵」两类通话，自由问询（05）还没做
+- [ ] 多机组音色区分（现在管制一套、机组一套）
+- [ ] 语音只覆盖放行席的四类通话，自由问询（05）还没做
 
 ---
 
