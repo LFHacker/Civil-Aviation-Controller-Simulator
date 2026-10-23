@@ -4,9 +4,9 @@ extends RefCounted
 
 const MAJOR := 0
 const MINOR := 1
-const PATCH := 24
+const PATCH := 25
 
-const CODENAME := "atis"
+const CODENAME := "expire"
 
 
 ## 形如 "0.0.1"

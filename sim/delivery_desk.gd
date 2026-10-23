@@ -74,23 +74,33 @@ var field := {
 ## 默认关闭，让单元测试照旧；开局时由会话打开。
 var enable_atis_check := false
 
-## 07 §2.3 / §7：机组在申请通话里报告 ATIS 的三种形态及其概率，按难度分级。
+## 07 §2.3 / §4.2 / §7：机组在申请通话里报告 ATIS 的三种形态及其概率，按难度分级。
 ##   current = 报现行代号 / missing = 根本没抄收 / stale = 报了个过期代号
-## 文档口径：简易 100% 现行；进阶 80% 现行 + 20% 未抄收；高阶 60 + 20 + 20。
-## 过期代号取"上一版"（Z 之前是 A 的前一版），因为它就是机组上次抄到的那份。
+## 文档 §4.2 是一张二维表：横轴难度、纵轴通波状态。这里拆成两张表——
+##   ATIS_REPORT_RATES        通波有效（当前代号）
+##   ATIS_REPORT_RATES_EXPIRED 通波已过期（超过 1 小时未更新）
 const ATIS_REPORT_RATES := {
 	"easy": [1.0, 0.0, 0.0],
 	"normal": [0.80, 0.20, 0.0],
 	"hard": [0.60, 0.20, 0.20],
 }
+const ATIS_REPORT_RATES_EXPIRED := {
+	"easy": [1.0, 0.0, 0.0],
+	"normal": [0.50, 0.30, 0.20],
+	"hard": [0.30, 0.20, 0.50],
+}
 const ATIS_REPORT_CURRENT := 0
 const ATIS_REPORT_MISSING := 1
 const ATIS_REPORT_STALE := 2
+## 报的过期代号往回退几个字母：通波有效时前 1–2 个，通波已过期时前 1–3 个（§4.2）
+const ATIS_STALE_BACK_VALID := 2
+const ATIS_STALE_BACK_EXPIRED := 3
 
 
-## 按当前难度掷出机组的 ATIS 抄收状态（只掷一次骰子，保证随机序列可复现）。
-func roll_atis_report() -> int:
-	var w: Array = ATIS_REPORT_RATES.get(difficulty, ATIS_REPORT_RATES["normal"])
+## 按当前难度与通波状态掷出机组的 ATIS 抄收状态（只掷一次骰子，保证随机序列可复现）。
+func roll_atis_report(expired: bool = false) -> int:
+	var table: Dictionary = ATIS_REPORT_RATES_EXPIRED if expired else ATIS_REPORT_RATES
+	var w: Array = table.get(difficulty, table["normal"])
 	var x := rng.randf()
 	if x < float(w[0]):
 		return ATIS_REPORT_CURRENT
@@ -100,9 +110,19 @@ func roll_atis_report() -> int:
 
 
 ## 这一档难度下，机组报过期代号的可能性有多大（0 表示这档不会出现）。
-func atis_stale_chance() -> float:
-	var w: Array = ATIS_REPORT_RATES.get(difficulty, ATIS_REPORT_RATES["normal"])
+func atis_stale_chance(expired: bool = false) -> float:
+	var table: Dictionary = ATIS_REPORT_RATES_EXPIRED if expired else ATIS_REPORT_RATES
+	var w: Array = table.get(difficulty, table["normal"])
 	return float(w[2])
+
+
+## 机组"以为自己抄到的那一份"：从现行代号往回退 1..back_max 个字母。
+func stale_alpha_of(alpha: String, back_max: int) -> String:
+	var a := alpha
+	var n := rng.randi_range(1, maxi(1, back_max))
+	for i in range(n):
+		a = AtisBroadcast.prev_alpha(a)
+	return a
 
 ## 是否要求"计划已核对"才能发放行许可。
 ## 真实放行席必须先核对飞行计划与进程单；默认关闭让单元测试照旧。
@@ -271,15 +291,26 @@ func spawn_request(sim_time: float, callsign: String = "") -> Flight:
 	f.plan_endurance = en if en != "" else str(_type_info(f.type).get("endurance", ""))
 
 	# 机组首次呼叫有没有报"已收到通播"——真实里这是要抓的。
-	# 07 §2.3：报的状态会影响这通电话的内容（现行代号 / 不提 / 报个过期代号）。
+	# 07 §2.3 / §4.2：报的状态会影响这通电话的内容（现行代号 / 不提 / 报个过期代号），
+	# 而且概率取决于"通波现在有没有过期"。
 	var alpha := str(field.get("atis_alpha", "A"))
+	var atis_is_expired := enable_atis_lifecycle \
+		and atis_state(sim_time) == AtisBroadcast.EXPIRED
 	if enable_atis_check:
-		f.atis_report = roll_atis_report()
+		# §4.2 第三行：通波里被选错了气象值时，机组照样报现行代号
+		# （它只是声称抄收，不代表内容对）——特情留给后面飞行阶段暴露
+		if enable_atis_lifecycle and atis.has_error:
+			f.atis_report = ATIS_REPORT_CURRENT
+		else:
+			f.atis_report = roll_atis_report(atis_is_expired)
 	else:
 		f.atis_report = ATIS_REPORT_CURRENT
 	f.atis_ok = f.atis_report == ATIS_REPORT_CURRENT
-	f.atis_reported = AtisBroadcast.prev_alpha(alpha) \
-		if f.atis_report == ATIS_REPORT_STALE else alpha
+	if f.atis_report == ATIS_REPORT_STALE:
+		var back := ATIS_STALE_BACK_EXPIRED if atis_is_expired else ATIS_STALE_BACK_VALID
+		f.atis_reported = stale_alpha_of(alpha, back)
+	else:
+		f.atis_reported = alpha
 
 	f.state = Flight.State.PENDING
 	f.request_time = sim_time

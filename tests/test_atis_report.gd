@@ -19,6 +19,9 @@ func _initialize() -> void:
 	_test_rates_easy()
 	_test_rates_normal()
 	_test_rates_hard()
+	_test_expired_table()
+	_test_stale_depth()
+	_test_error_atis_reports_current()
 	_test_request_text()
 	_test_require_atis()
 	_test_gate_effect()
@@ -60,6 +63,14 @@ func _sample(d: DeliveryDesk, n: int) -> Array:
 			c[0] = -9999
 		else:
 			c[r] += 1
+	return c
+
+
+## 同上，但按"通波已过期"那张表掷。
+func _sample_expired(d: DeliveryDesk, n: int) -> Array:
+	var c := [0, 0, 0]
+	for i in range(n):
+		c[d.roll_atis_report(true)] += 1
 	return c
 
 
@@ -124,6 +135,92 @@ func _test_rates_hard() -> void:
 		str(d.atis_stale_chance()))
 
 
+## 07 §4.2 第二行：通波已过期（>1 小时未更新）时，概率整张表换掉。
+func _test_expired_table() -> void:
+	_section("通波已过期时概率换表（07 §4.2 第二行）")
+	# 进阶：有效时 80/20/0，过期后 50/30/20
+	var dn := _desk(3030)
+	dn.difficulty = "normal"
+	dn.enable_atis_lifecycle = true
+	dn.atis.issued_min = dn.now_minutes(0.0) - 120   # 两小时前发布 → 已过期
+	_check(dn.atis_state(0.0) == AtisBroadcast.EXPIRED, "夹具里通波确实过期了",
+		str(dn.atis_state(0.0)))
+	var cn := _sample_expired(dn, 500)
+	var cur := float(cn[0]) / 500.0
+	var miss := float(cn[1]) / 500.0
+	var stale := float(cn[2]) / 500.0
+	_check(cur > 0.42 and cur < 0.58, "过期后现行比例降到约 50%", "%.2f" % cur)
+	_check(miss > 0.22 and miss < 0.38, "没抄收升到约 30%", "%.2f" % miss)
+	_check(stale > 0.13 and stale < 0.27, "开始出现过期代号（约 20%）", "%.2f" % stale)
+
+	# 高阶：有效时 60/20/20，过期后 30/20/50
+	var dh := _desk(3031)
+	dh.difficulty = "hard"
+	dh.enable_atis_lifecycle = true
+	dh.atis.issued_min = dh.now_minutes(0.0) - 120
+	var ch := _sample_expired(dh, 600)
+	var sth := float(ch[2]) / 600.0
+	_check(sth > 0.42 and sth < 0.58, "高阶过期后过期代号升到约 50%", "%.2f" % sth)
+	_check(is_equal_approx(dh.atis_stale_chance(true), 0.5), "过期表里过期概率 50%",
+		str(dh.atis_stale_chance(true)))
+	_check(is_equal_approx(dh.atis_stale_chance(false), 0.2), "有效表里还是 20%",
+		str(dh.atis_stale_chance(false)))
+
+	# 简易任何通波状态都报现行代号
+	var de := _desk(3032)
+	de.difficulty = "easy"
+	de.enable_atis_lifecycle = true
+	de.atis.issued_min = de.now_minutes(0.0) - 120
+	var ce := _sample_expired(de, 200)
+	_check(ce == [200, 0, 0], "简易模式过期也照报现行代号", str(ce))
+
+
+## 过期代号往回退几个字母：有效 1–2 个，已过期 1–3 个（§4.2）。
+func _test_stale_depth() -> void:
+	_section("过期代号往回退几个字母（07 §4.2）")
+	var d := _desk(4040)
+	var seen2 := {}
+	for i in range(200):
+		seen2[d.stale_alpha_of("D", DeliveryDesk.ATIS_STALE_BACK_VALID)] = true
+	var keys := seen2.keys()
+	keys.sort()
+	_check(keys == ["B", "C"], "有效通波：D 退 1–2 个 = B/C", str(keys))
+
+	var seen3 := {}
+	for i in range(300):
+		seen3[d.stale_alpha_of("D", DeliveryDesk.ATIS_STALE_BACK_EXPIRED)] = true
+	var keys3 := seen3.keys()
+	keys3.sort()
+	_check(keys3 == ["A", "B", "C"], "过期通波：D 退 1–3 个 = A/B/C", str(keys3))
+	# 跨 A 回绕
+	var seenz := {}
+	for i in range(300):
+		seenz[d.stale_alpha_of("A", DeliveryDesk.ATIS_STALE_BACK_EXPIRED)] = true
+	var keysz := seenz.keys()
+	keysz.sort()
+	_check(keysz == ["X", "Y", "Z"], "A 往回退会绕到 X/Y/Z", str(keysz))
+
+
+## §4.2 第三行：通波被玩家选错了气象值时，机组照样报现行代号。
+func _test_error_atis_reports_current() -> void:
+	_section("通波含错误值时照报现行代号（07 §4.2 第三行）")
+	var d := _desk(5050)
+	d.difficulty = "hard"
+	d.enable_atis_check = true
+	d.enable_atis_lifecycle = true
+	# 把通播 QNH 写错 → has_error
+	var o := d.atis_edit_options()
+	d.update_atis({"qnh": (o.qnh as Array)[3]}, 0.0)
+	_check(d.atis.has_error, "通播被标记为与实况不符")
+	for i in range(30):
+		var f := d.spawn_request(0.0)
+		if f.atis_report != 0:
+			_check(false, "第 %d 架报了非现行代号（%d）" % [i, f.atis_report],
+				f.atis_reported)
+			return
+	_check(true, "30 架全都报现行代号（高阶原本有 20% 会报过期）")
+
+
 ## 三种形态分别落到通话文本、atis_ok、atis_reported 上。
 func _test_request_text() -> void:
 	_section("申请通话随抄收状态变化（07 §2.3）")
@@ -152,11 +249,14 @@ func _test_request_text() -> void:
 
 	if stale_flight != null:
 		_check(stale_flight.atis_ok == false, "报过期代号不算抄收有效（离场情报不能省）")
-		_check(stale_flight.atis_reported == "Z",
-			"报的是上一版代号 Z（现行是 A）", stale_flight.atis_reported)
+		# §4.2：通波有效时报的过期代号是"前 1–2 个字母"（现行 A → Y 或 Z）
+		_check(stale_flight.atis_reported == "Y" or stale_flight.atis_reported == "Z",
+			"报的是前 1–2 个字母（Y 或 Z）", stale_flight.atis_reported)
+		_check(stale_flight.atis_reported != "A", "不是现行代号", stale_flight.atis_reported)
 		var row := _pilot_request_row(d, stale_flight.callsign)
 		_check(row != "", "有这通申请记录", stale_flight.callsign)
-		_check(row.contains("已收到通播 Z"), "通话里说的是过期代号 Z", row)
+		_check(row.contains("已收到通播 " + stale_flight.atis_reported),
+			"通话里说的是它自己报的那个代号", row)
 		_check(not row.contains("已收到通播 A"), "不会误报现行代号 A", row)
 
 	if missing_flight != null:
